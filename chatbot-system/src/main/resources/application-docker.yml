@@ -1,0 +1,32 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://host.docker.internal:3306/moodle?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+
+openai:
+  api:
+    key: ${OPENAI_API_KEY:}
+    url: https://api.openai.com/v1/chat/completions
+    model: ${OPENAI_MODEL:gpt-4o-mini}
+    timeout: 30000
+
+moodle:
+  api:
+    base-url: ${MOODLE_BASE_URL:http://host.docker.internal/moodle}
+    token: ${MOODLE_API_TOKEN:}
+    wsfunction-prefix: core_
+    timeout: 30000
+    max-retries: 3
+    retry-delay: 1000
+
+server:
+  port: ${SERVER_PORT:8081}

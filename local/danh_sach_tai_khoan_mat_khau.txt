@@ -1,0 +1,57 @@
+===========================================
+  DANH SÁCH TÀI KHOẢN & MẬT KHẨU
+===========================================
+
+MẬT KHẨU CHUNG: User@123
+
+-------------------------------------------
+SINH VIÊN (Khóa 2022)
+-------------------------------------------
+
+110122001    | An Nguyễn Văn               | student01@student.edu.vn
+110122002    | Bình Trần Thị             | student02@student.edu.vn
+110122003    | Cường Lê Văn              | student03@student.edu.vn
+110122004    | Dung Phạm Thị              | student04@student.edu.vn
+110122005    | Em Hoàng Văn                 | student05@student.edu.vn
+110122006    | Phương Vũ Thị             | student06@student.edu.vn
+110122007    | Giang Đặng Văn             | student07@student.edu.vn
+110122008    | Hoa Bùi Thị                 | student08@student.edu.vn
+110122009    | Khoa Ngô Văn                 | student09@student.edu.vn
+110122010    | Lan Đinh Thị                | student10@student.edu.vn
+110122011    | Minh Võ Văn                  | student11@student.edu.vn
+110122012    | Nga Lý Thị                  | student12@student.edu.vn
+110122013    | Phúc Trương Văn            | student13@student.edu.vn
+110122014    | Quỳnh Phan Thị             | student14@student.edu.vn
+110122015    | Sơn Dương Văn              | student15@student.edu.vn
+110122016    | Nguyễn Văn An               | nguyenvanan@student.uit.edu.vn
+110122017    | Trần Thị Bình             | tranthib@student.uit.edu.vn
+110122018    | Lê Văn Cường              | levanc@student.uit.edu.vn
+110122019    | Phạm Thị Dung              | phamthid@student.uit.edu.vn
+110122020    | Hoàng Văn Em                 | hoangvane@student.uit.edu.vn
+110122021    | Vũ Thị Phương             | vuthif@student.uit.edu.vn
+110122022    | Đặng Văn Giang             | dangvang@student.uit.edu.vn
+110122023    | Bùi Thị Hoa                 | buithih@student.uit.edu.vn
+110122024    | Ngô Văn Ích                 | ngovani@student.uit.edu.vn
+110122025    | Đinh Thị Kim                | dinhthik@student.uit.edu.vn
+110122026    | Trương Văn Long             | truongvanl@student.uit.edu.vn
+110122027    | Lý Thị Mai                  | lythim@student.uit.edu.vn
+110122028    | Phan Văn Nam                  | phanvann@student.uit.edu.vn
+110122029    | Võ Thị Oanh                 | vothio@student.uit.edu.vn
+
+-------------------------------------------
+GIẢNG VIÊN
+-------------------------------------------
+
+gv.levanc    | Lê Văn C                     | levanc@uit.edu.vn
+gv.nguyenvana | Nguyễn Văn A                | nguyenvana@uit.edu.vn
+gv.tranthib  | Trần Thị B                 | tranthib@uit.edu.vn
+gv.trinhquocviet | Trịnh Quốc Việt          | trinhquocviet@uit.edu.vn
+
+===========================================
+Ghi chú:
+- Mã sinh viên: 110122XXX
+  + 1101: Mã định danh
+  + 22: Khóa 2022
+  + XXX: Số thứ tự (001-999)
+- Tất cả mật khẩu: User@123
+===========================================

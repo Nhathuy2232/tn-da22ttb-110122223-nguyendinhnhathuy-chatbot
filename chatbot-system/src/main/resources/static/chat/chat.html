@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Hỗ trợ Giảng viên</title>
+    <link rel="stylesheet" href="chat.css">
+</head>
+<body>
+    <div id="chat-widget">
+        <div id="chat-header">
+            <div class="header-content">
+                <span class="bot-icon">🤖</span>
+                <h3>Chatbot Hỗ trợ</h3>
+            </div>
+            <button id="minimize-btn" title="Thu gọn">−</button>
+        </div>
+        
+        <div id="chat-messages">
+            <!-- Messages will be appended here -->
+        </div>
+        
+        <div id="chat-input-container">
+            <input type="text" id="chat-input" placeholder="Nhập câu hỏi của bạn..." autocomplete="off">
+            <button id="send-btn" title="Gửi">
+                <span>➤</span>
+            </button>
+        </div>
+        
+        <div id="quick-actions">
+            <button class="quick-btn" data-message="Cho tôi xem danh sách sinh viên nguy cơ">
+                📋 Sinh viên nguy cơ
+            </button>
+            <button class="quick-btn" data-message="Thống kê tổng quan">
+                📊 Thống kê
+            </button>
+        </div>
+    </div>
+
+    <!-- Floating button to open chat -->
+    <button id="chat-toggle-btn" title="Mở chatbot">
+        <span>💬</span>
+    </button>
+
+    <script src="chat.js"></script>
+</body>
+</html>

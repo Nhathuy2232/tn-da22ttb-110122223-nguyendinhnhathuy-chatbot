@@ -1,0 +1,335 @@
+==========================================
+HƯỚNG DẪN ĐƠN GIẢN: NHÚNG CHATBOT VÀO FOOTER
+==========================================
+
+Vấn đề: File footer.mustache hiện tại quá phức tạp với nhiều phiên bản chatbot
+
+Giải pháp: Xóa TẤT CẢ code chatbot cũ, chỉ giữ phần nhúng trong footer
+
+==========================================
+BƯỚC 1: Mở file
+==========================================
+c:\xampp\htdocs\moodle\theme\moove\templates\footer.mustache
+
+==========================================
+BƯỚC 2: TÌM VÀ XÓA các đoạn sau
+==========================================
+
+A. Xóa toàn bộ phần "footer-content-popover" (dòng ~175-235)
+   Từ: <div class="footer-content-popover container"
+   Đến: </div> (đóng footer-content-popover)
+
+B. Xóa toàn bộ floating button (dòng ~335 đến ~700+)
+   Từ: {{! EduGuard Chatbot - Modern Floating Design }}
+   Đến: </style> (cuối cùng của floating button)
+
+C. Xóa script cũ nếu có
+   Từ: {{! EduGuard Chatbot - OpenAI Integration v3.0 - POPOVER VERSION }}
+   Đến: </script>
+
+==========================================
+BƯỚC 3: GIỮ LẠI phần này (đã có trong footer)
+==========================================
+
+Phần này nằm TRƯỚC </footer>:
+
+    {{! EduGuard Chatbot - Nhúng trực tiếp vào Footer }}
+    <div class="eduguard-footer-chatbot">
+        ...
+    </div>
+    
+</footer>
+
+==========================================
+BƯỚC 4: THÊM CSS và JavaScript VÀO CUỐI FILE
+==========================================
+
+SAU dòng: {{{ output.standard_end_of_body_html }}}
+
+THÊM code sau vào cuối file (TRƯỚC {{#js}} cuối cùng):
+
+<style>
+.eduguard-footer-chatbot {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 0;
+    margin-top: 20px;
+}
+
+.eduguard-chatbot-container {
+    background: white;
+    border-radius: 12px 12px 0 0;
+    overflow: hidden;
+}
+
+.eduguard-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 20px;
+    color: white;
+}
+
+.eduguard-icon {
+    width: 50px;
+    height: 50px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #4ade80;
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.eduguard-body {
+    padding: 20px;
+    background: #f8f9fa;
+}
+
+.eduguard-messages {
+    min-height: 200px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 15px;
+    background: white;
+    border-radius: 8px;
+    margin-bottom: 15px;
+}
+
+.eduguard-msg {
+    margin-bottom: 12px;
+    display: flex;
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.eduguard-msg.user { justify-content: flex-end; }
+.eduguard-msg.bot { justify-content: flex-start; }
+
+.eduguard-msg-content {
+    max-width: 70%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.eduguard-msg.user .eduguard-msg-content {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+.eduguard-msg.bot .eduguard-msg-content {
+    background: #e9ecef;
+    color: #1f2937;
+    border-bottom-left-radius: 4px;
+}
+
+.eduguard-info {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.eduguard-info h6 {
+    color: #667eea;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.eduguard-info ul li {
+    padding: 5px 0;
+    font-size: 14px;
+}
+
+.eduguard-input-area {
+    margin-top: 15px;
+}
+
+.eduguard-typing {
+    display: inline-flex;
+    gap: 3px;
+}
+
+.eduguard-typing span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #9ca3af;
+    animation: typing 1.4s infinite;
+}
+
+.eduguard-typing span:nth-child(2) { animation-delay: 0.2s; }
+.eduguard-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.7; }
+    30% { transform: translateY(-5px); opacity: 1; }
+}
+
+#eduguard-chat-body.minimized {
+    display: none;
+}
+</style>
+
+<script>
+(function() {
+    'use strict';
+    const API = 'http://localhost:8082/api/chat/message';
+    const WELCOME = '👋 Xin chào! Tôi là EduGuard Assistant.\n\n📊 Xem điểm số\n📅 Kiểm tra chuyên cần\n⚠️ Theo dõi sinh viên nguy cơ\n📈 Thống kê lớp học';
+    
+    function getUser() {
+        if (window.M?.cfg?.username) {
+            const u = window.M.cfg.username;
+            const id = window.M.cfg.userid || 0;
+            let role = 'GUEST';
+            if (u === 'admin') role = 'ADMIN';
+            else if (u.startsWith('giangvien') || u.startsWith('teacher') || u.startsWith('gv')) role = 'LECTURER';
+            else if (u.match(/^11\d{7}$/) || u.match(/^student\d+$/)) role = 'STUDENT';
+            else if (u !== 'guest' && id > 0) role = 'STUDENT';
+            return { username: u, userid: id > 0 ? id : 1, role: role, sessionId: 'session-' + Date.now() };
+        }
+        return { username: 'guest', userid: 1, role: 'GUEST', sessionId: 'session-' + Date.now() };
+    }
+    
+    function addMsg(text, sender) {
+        const c = document.getElementById('eduguard-messages');
+        if (!c) return;
+        const div = document.createElement('div');
+        div.className = 'eduguard-msg ' + sender;
+        const content = document.createElement('div');
+        content.className = 'eduguard-msg-content';
+        content.textContent = text;
+        div.appendChild(content);
+        c.appendChild(div);
+        c.scrollTop = c.scrollHeight;
+    }
+    
+    function showTyping() {
+        const c = document.getElementById('eduguard-messages');
+        if (!c) return;
+        const div = document.createElement('div');
+        div.className = 'eduguard-msg bot';
+        div.id = 'typing';
+        const content = document.createElement('div');
+        content.className = 'eduguard-msg-content';
+        content.innerHTML = '<div class="eduguard-typing"><span></span><span></span><span></span></div>';
+        div.appendChild(content);
+        c.appendChild(div);
+        c.scrollTop = c.scrollHeight;
+    }
+    
+    function hideTyping() {
+        const t = document.getElementById('typing');
+        if (t) t.remove();
+    }
+    
+    async function send(msg) {
+        const user = getUser();
+        const btn = document.getElementById('eduguard-send');
+        if (!btn) return;
+        btn.disabled = true;
+        showTyping();
+        try {
+            const res = await fetch(API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg, username: user.username, role: user.role, sessionId: user.sessionId, userId: user.userid })
+            });
+            hideTyping();
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            const reply = data.data?.reply || data.message || 'Xin lỗi, không thể xử lý.';
+            addMsg(reply, 'bot');
+        } catch (err) {
+            console.error('EduGuard:', err);
+            hideTyping();
+            addMsg('⚠️ Lỗi kết nối server (port 8082).', 'bot');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+    
+    function handleSend() {
+        const input = document.getElementById('eduguard-input');
+        if (!input) return;
+        const msg = input.value.trim();
+        if (msg) {
+            addMsg(msg, 'user');
+            input.value = '';
+            send(msg);
+        }
+    }
+    
+    function init() {
+        const btn = document.getElementById('eduguard-send');
+        const input = document.getElementById('eduguard-input');
+        const minimize = document.getElementById('eduguard-minimize');
+        
+        if (!btn || !input) return;
+        
+        btn.addEventListener('click', handleSend);
+        input.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSend();
+            }
+        });
+        
+        if (minimize) {
+            minimize.addEventListener('click', function() {
+                const body = document.getElementById('eduguard-chat-body');
+                if (body) {
+                    body.classList.toggle('minimized');
+                }
+            });
+        }
+        
+        addMsg(WELCOME, 'bot');
+        console.log('✅ EduGuard: Ready in footer');
+    }
+    
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        setTimeout(init, 100);
+    }
+})();
+</script>
+
+==========================================
+BƯỚC 5: LƯU VÀ TEST
+==========================================
+
+1. Lưu file footer.mustache
+2. Purge cache: http://localhost/moodle/admin/purgecaches.php
+3. Hard refresh: Ctrl + Shift + R
+4. Chatbot sẽ xuất hiện ở CUỐI TRANG (footer), không có icon nào
+
+==========================================
+KẾT QUẢ MONG MUỐN
+==========================================
+
+✅ Chatbot hiển thị cố định ở cuối mọi trang
+✅ Không có floating button
+✅ Không có popup "?"
+✅ Có thể minimize/maximize bằng nút mũi tên
+✅ Giao diện đẹp, responsive
+
+==========================================

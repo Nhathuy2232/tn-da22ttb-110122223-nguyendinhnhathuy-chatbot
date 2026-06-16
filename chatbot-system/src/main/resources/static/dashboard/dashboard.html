@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Cảnh báo Sinh viên</title>
+    <link rel="stylesheet" href="dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Dashboard Cảnh báo Sinh viên</h1>
+            <div class="header-actions">
+                <button id="refresh-btn" class="btn btn-primary">🔄 Làm mới</button>
+                <button id="export-btn" class="btn btn-secondary">📥 Xuất báo cáo</button>
+            </div>
+        </header>
+
+        <!-- Summary Cards -->
+        <div class="summary-cards">
+            <div class="card card-green">
+                <div class="card-icon">✅</div>
+                <div class="card-content">
+                    <h3 id="green-count">0</h3>
+                    <p>An toàn (GREEN)</p>
+                </div>
+            </div>
+            
+            <div class="card card-yellow">
+                <div class="card-icon">🟡</div>
+                <div class="card-content">
+                    <h3 id="yellow-count">0</h3>
+                    <p>Cảnh báo (YELLOW)</p>
+                </div>
+            </div>
+            
+            <div class="card card-red">
+                <div class="card-icon">🔴</div>
+                <div class="card-content">
+                    <h3 id="red-count">0</h3>
+                    <p>Nguy cơ cao (RED)</p>
+                </div>
+            </div>
+            
+            <div class="card card-total">
+                <div class="card-icon">👥</div>
+                <div class="card-content">
+                    <h3 id="total-count">0</h3>
+                    <p>Tổng sinh viên</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-container">
+            <div class="chart-box">
+                <h2>Phân bố mức độ nguy cơ</h2>
+                <canvas id="risk-chart"></canvas>
+            </div>
+            
+            <div class="chart-box">
+                <h2>Xu hướng cảnh báo</h2>
+                <canvas id="trend-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Student List -->
+        <div class="student-list-container">
+            <div class="list-header">
+                <h2>🔴 Danh sách sinh viên nguy cơ cao</h2>
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="Tìm kiếm sinh viên...">
+                </div>
+            </div>
+            
+            <div class="table-container">
+                <table id="students-table">
+                    <thead>
+                        <tr>
+                            <th>STT</th>
+                            <th>Mã SV</th>
+                            <th>Họ tên</th>
+                            <th>Email</th>
+                            <th>Điểm TB</th>
+                            <th>Chuyên cần</th>
+                            <th>Nguy cơ</th>
+                            <th>Hành động</th>
+                        </tr>
+                    </thead>
+                    <tbody id="students-tbody">
+                        <tr>
+                            <td colspan="8" class="loading">Đang tải dữ liệu...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
