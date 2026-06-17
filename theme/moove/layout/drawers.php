@@ -27,6 +27,70 @@ defined('MOODLE_INTERNAL') || die();
 require_once($CFG->libdir . '/behat/lib.php');
 require_once($CFG->dirroot . '/course/lib.php');
 
+function theme_moove_chatbot_resolve_role($userid): string {
+    global $DB, $CFG;
+
+    // 1. Site admin luôn là ADMIN
+    if (is_siteadmin($userid)) {
+        return 'ADMIN';
+    }
+
+    $systemcontext = \context_system::instance();
+
+    // Lấy tất cả shortname role của user ở system context
+    $userroles = $DB->get_records_sql(
+        "SELECT r.shortname
+           FROM {role_assignments} ra
+           JOIN {role} r ON r.id = ra.roleid
+           JOIN {context} c ON c.id = ra.contextid
+          WHERE ra.userid = :userid
+            AND c.contextlevel = :syslevel",
+        ['userid' => $userid, 'syslevel' => CONTEXT_SYSTEM]
+    );
+
+    $roleshorts = [];
+    foreach ($userroles as $r) {
+        $roleshorts[] = $r->shortname;
+    }
+
+    // Nếu không có role ở system context, kiểm tra ở mọi context
+    if (empty($roleshorts)) {
+        $allroles = $DB->get_records_sql(
+            "SELECT r.shortname
+               FROM {role_assignments} ra
+               JOIN {role} r ON r.id = ra.roleid
+              WHERE ra.userid = :userid",
+            ['userid' => $userid]
+        );
+        foreach ($allroles as $r) {
+            $roleshorts[] = $r->shortname;
+        }
+    }
+
+    if (empty($roleshorts)) {
+        return 'STUDENT';
+    }
+
+    // Thứ tự ưu tiên: ADMIN > ADVISER > LECTURER > STUDENT
+    // Một user có thể có nhiều role, role cao nhất sẽ thắng
+    $priority = [
+        'ADMIN'    => ['manager', 'admin'],
+        'ADVISER'  => ['academicadviser', 'adviser', 'covan', 'coursecreator'],
+        'LECTURER' => ['editingteacher', 'teacher'],
+        'STUDENT'  => ['student'],
+    ];
+
+    foreach ($priority as $resolved => $shortnames) {
+        foreach ($shortnames as $sn) {
+            if (in_array($sn, $roleshorts, true)) {
+                return $resolved;
+            }
+        }
+    }
+
+    return 'STUDENT';
+}
+
 // Add block button in editing mode.
 $addblockbutton = $OUTPUT->addblockbutton();
 
@@ -120,8 +184,17 @@ $templatecontext = [
     // CRITICAL: Add username for chatbot role detection
     'currentusername' => $USER->username,
     'currentuserid' => $USER->id,
+    'currentuserrole' => theme_moove_chatbot_resolve_role($USER->id),
+    'currentusersession' => session_id(),
 ];
 
 $templatecontext = array_merge($templatecontext, $themesettings->footer());
+
+// Add chatbot data for footer
+$templatecontext['chatbot_api'] = 'http://localhost:8082/api/chat/message';
+$templatecontext['chatbot_username'] = $USER->username;
+$templatecontext['chatbot_userid'] = $USER->id;
+$templatecontext['chatbot_sessionid'] = session_id();
+$templatecontext['chatbot_role'] = theme_moove_chatbot_resolve_role($USER->id);
 
 echo $OUTPUT->render_from_template('theme_moove/drawers', $templatecontext);

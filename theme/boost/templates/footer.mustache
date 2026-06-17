@@ -104,13 +104,13 @@ require(['theme_boost/footer-popover'], function(FooterPopover) {
 {{#js}}
 require(['jquery'], function($) {
     window.chatbotConfig = {
-        apiUrl: 'http://localhost:8081/api',
+        apiUrl: 'http://localhost:8082/api',
         position: 'bottom-right',
-        primaryColor: '#0066cc'
+        primaryColor: '#2196F3'
     };
 
     var script = document.createElement('script');
-    script.src = '{{{ config.wwwroot }}}/chatbot-system/src/main/resources/static/chat/chatbot-widget.js?v=' + new Date().getTime();
+    script.src = 'http://localhost:8082/chat/chatbot-widget.js?v=' + new Date().getTime();
     script.async = true;
     script.onload = function() {
         console.log('Chatbot widget loaded successfully');
