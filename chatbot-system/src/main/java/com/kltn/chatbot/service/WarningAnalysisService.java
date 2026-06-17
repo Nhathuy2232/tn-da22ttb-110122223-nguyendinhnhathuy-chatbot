@@ -1,15 +1,20 @@
 package com.kltn.chatbot.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.kltn.chatbot.event.RiskDetectedEvent;
 import com.kltn.chatbot.model.entity.Course;
 import com.kltn.chatbot.model.entity.Enrollment;
 import com.kltn.chatbot.model.entity.Student;
 import com.kltn.chatbot.model.entity.Warning;
 import com.kltn.chatbot.model.enums.RiskLevel;
+import com.kltn.chatbot.model.enums.WarningType;
+import com.kltn.chatbot.repository.CourseRepository;
+import com.kltn.chatbot.repository.StudentRepository;
 import com.kltn.chatbot.repository.WarningRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +40,9 @@ public class WarningAnalysisService {
 
     private final WarningRepository warningRepository;
     private final MoodleApiService moodleApiService;
+    private final ApplicationEventPublisher eventPublisher;
+    private final StudentRepository studentRepository;
+    private final CourseRepository courseRepository;
 
     @Value("${app.risk-analysis.green-threshold.completion-rate:80}")
     private Double greenCompletionThreshold;
@@ -84,18 +92,34 @@ public class WarningAnalysisService {
                 .student(student)
                 .course(course)
                 .riskLevel(riskLevel)
+                .severity(riskLevel)
+                .warningType(detectWarningType(gradeAverage, attendanceRate, completionRate, lastAccessDays))
+                .message(buildWarningMessage(riskLevel, gradeAverage, attendanceRate, completionRate, lastAccessDays))
                 .gradeAverage(gradeAverage)
                 .attendanceRate(attendanceRate)
                 .completionRate(completionRate)
                 .lastAccessDays(lastAccessDays)
                 .reasons(String.join("; ", reasons))
                 .isAcknowledged(false)
+                .isSent(false)
+                .isResolved(false)
                 .build();
 
         warning = warningRepository.save(warning);
 
-        log.info("Risk level calculated: {} for student: {} in course: {}", 
+        log.info("Risk level calculated: {} for student: {} in course: {}",
                 riskLevel, student.getId(), course.getId());
+
+        // Publish event for downstream listeners (notification, websocket, etc.)
+        if (riskLevel == RiskLevel.RED) {
+            try {
+                eventPublisher.publishEvent(new RiskDetectedEvent(this, warning));
+                log.info("Published RiskDetectedEvent for RED warning id={}", warning.getId());
+            } catch (Exception e) {
+                log.warn("Failed to publish RiskDetectedEvent for warning id={}: {}",
+                        warning.getId(), e.getMessage());
+            }
+        }
 
         return warning;
     }
@@ -232,5 +256,84 @@ public class WarningAnalysisService {
      */
     public Long countWarningsByRiskLevel(RiskLevel riskLevel) {
         return warningRepository.countByRiskLevel(riskLevel);
+    }
+
+    /**
+     * Test trigger: tạo 1 warning RED giả lập để kiểm thử pipeline notification.
+     * Dùng cho development/staging - sẽ gửi message thật vào Moodle.
+     */
+    @Transactional
+    public Warning testTriggerRedEvent(Long studentLocalId, Long courseLocalId) {
+        Student student = studentRepository.findById(studentLocalId)
+                .orElseThrow(() -> new RuntimeException("Student not found: " + studentLocalId));
+        Course course = courseRepository.findById(courseLocalId)
+                .orElseThrow(() -> new RuntimeException("Course not found: " + courseLocalId));
+
+        // Build entity in-memory (skip DB save vì schema cũ có các field NOT NULL mà entity không map)
+        Warning warning = Warning.builder()
+                .id(System.currentTimeMillis()) // fake id for event
+                .student(student)
+                .course(course)
+                .riskLevel(RiskLevel.RED)
+                .severity(RiskLevel.RED)
+                .warningType(WarningType.GENERAL)
+                .message("TEST: Điểm thấp + chuyên cần thấp + không truy cập 21 ngày")
+                .gradeAverage(3.5)
+                .attendanceRate(15.0)
+                .completionRate(20.0)
+                .lastAccessDays(21)
+                .reasons("TEST: Điểm thấp + chuyên cần thấp + không truy cập 21 ngày")
+                .isAcknowledged(false)
+                .isSent(false)
+                .isResolved(false)
+                .build();
+        log.info("Test RED event dispatched for student={} course={} (in-memory warning, not persisted)",
+                student.getId(), course.getId());
+
+        eventPublisher.publishEvent(new RiskDetectedEvent(this, warning));
+        return warning;
+    }
+
+    /**
+     * Pick the most severe WarningType to persist alongside this warning.
+     * The live {@code warnings.warning_type} column is NOT NULL, so we must
+     * always supply a value.
+     */
+    private WarningType detectWarningType(Double gradeAverage, Double attendanceRate,
+                                          Double completionRate, Integer lastAccessDays) {
+        if (lastAccessDays != null && lastAccessDays > 14) {
+            return WarningType.ACTIVITY;
+        }
+        if (attendanceRate != null && attendanceRate < 80.0) {
+            return WarningType.ATTENDANCE;
+        }
+        if (gradeAverage != null && gradeAverage < 5.0) {
+            return WarningType.GRADE;
+        }
+        if (completionRate != null && completionRate < 60.0) {
+            return WarningType.ACTIVITY;
+        }
+        return WarningType.GENERAL;
+    }
+
+    /**
+     * Build a short human-readable message for the {@code warnings.message} NOT NULL column.
+     */
+    private String buildWarningMessage(RiskLevel riskLevel, Double gradeAverage, Double attendanceRate,
+                                       Double completionRate, Integer lastAccessDays) {
+        StringBuilder sb = new StringBuilder("Cảnh báo ").append(riskLevel.name());
+        if (gradeAverage != null) {
+            sb.append(" - Điểm TB: ").append(String.format("%.2f", gradeAverage));
+        }
+        if (attendanceRate != null) {
+            sb.append(" - Chuyên cần: ").append(String.format("%.1f%%", attendanceRate));
+        }
+        if (completionRate != null) {
+            sb.append(" - Hoàn thành: ").append(String.format("%.1f%%", completionRate));
+        }
+        if (lastAccessDays != null) {
+            sb.append(" - Không truy cập: ").append(lastAccessDays).append(" ngày");
+        }
+        return sb.toString();
     }
 }

@@ -13,28 +13,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
- * Chatbot Service - Sử dụng OpenAI API thay vì Rasa
- * Version 5.0 - OpenAI Integration
- * 
- * Kiến trúc mới:
- * 1. OpenAI API - Phân tích intent và entities từ tin nhắn
- * 2. ChatbotService - Điều phối request và gọi business logic
- * 3. MoodleRestController - Xử lý các REST endpoints trả về dữ liệu Moodle
- * 
- * Ưu điểm:
- * - Không cần train model
- * - Hiểu ngôn ngữ tự nhiên tốt hơn
- * - Dễ maintain và mở rộng
- * - Giảm độ phức tạp hệ thống (bỏ Python/Rasa)
- * 
+ * Chatbot Service - Phiên bản 6.0
+ *
+ * Tính năng mới:
+ * - Lọc sinh viên vi phạm theo tiêu chí (chỉ trả về SV vi phạm)
+ * - Hỗ trợ đầy đủ intent cho 4 quyền
+ * - Format response thân thiện, dễ đọc
+ * - Tích hợp tốt với LocalIntentMatcher đã train
+ *
  * @author Nguyễn Đình Nhật Huy - MSSV: 110122223
- * @version 5.0 - OpenAI Integration
  */
 @Service
 @RequiredArgsConstructor
@@ -48,216 +44,122 @@ public class ChatbotService {
     private final OpenAIService openaiService;
     private final MoodleRestController moodleRestController;
     private final ChatHistoryRepository chatHistoryRepository;
+    private final MoodleDirectQueryService directQuery;
+    private final NotificationService notificationService;
+    private final ResponseGenerator responseGenerator;
 
-    /**
-     * Xử lý tin nhắn từ người dùng
-     * 
-     * @param request DTO chứa message, username, role
-     * @return ChatResponseDTO với response text
-     */
     @Transactional
     public ChatResponseDTO handleUserMessage(ChatRequestDTO request) {
         String username = resolveUsername(request);
         String role = resolveRole(request);
 
         log.info("========== CHATBOT REQUEST ==========");
-        log.info("Username: {}", username);
-        log.info("Role: {}", role);
-        log.info("Message: {}", request.getMessage());
-        log.info("=====================================");
-        
+        log.info("Username: {} | Role: {} | Message: {}", username, role, request.getMessage());
+
         try {
-            // Bước 1: Nhận diện nhanh chitchat (không cần gọi API)
-            Map<String, Object> analysis = LocalIntentMatcher.match(request.getMessage())
+            // Bước 1: Phân tích intent (ưu tiên LocalIntentMatcher có entity)
+            Map<String, Object> analysis = LocalIntentMatcher.matchForRole(request.getMessage(), role, username)
                     .orElseGet(() -> openaiService.analyzeMessage(
-                            request.getMessage(),
-                            role,
-                            username
-                    ));
-            
+                            request.getMessage(), role, username));
+
             String intent = (String) analysis.get("intent");
             double confidence = ((Number) analysis.get("confidence")).doubleValue();
             @SuppressWarnings("unchecked")
             Map<String, String> entities = (Map<String, String>) analysis.get("entities");
-            String geminiResponseText = (String) analysis.get("response_text");
-            
-            log.info("========== OPENAI ANALYSIS ==========");
-            log.info("Intent: {}", intent);
-            log.info("Confidence: {}", confidence);
-            log.info("Entities: {}", entities);
-            log.info("Response text: {}", geminiResponseText);
-            log.info("=====================================");
 
-            // Lỗi từ Gemini API — trả thông báo thật, không dùng fallback "không hiểu"
+            log.info("Intent: {} | Confidence: {} | Entities: {}", intent, confidence, entities);
+
             if ("ERROR".equals(intent)) {
-                String errorResponse = (geminiResponseText != null && !geminiResponseText.isBlank())
-                        ? geminiResponseText
-                        : "Xin lỗi, hệ thống AI tạm thời không khả dụng. Vui lòng thử lại sau.";
+                String errorResponse = "Xin lỗi, hệ thống AI tạm thời không khả dụng. Vui lòng thử lại sau.";
                 saveChatHistory(username, request.getMessage(), errorResponse, intent);
                 return createResponse(errorResponse, intent, confidence, entities);
             }
-            
-            // Bước 2: Confidence — bỏ qua với chitchat; các intent khác cần >= 0.5
+
             if (confidence < 0.5 && !CHITCHAT_INTENTS.contains(intent)) {
-                String fallbackResponse = (geminiResponseText != null && !geminiResponseText.isBlank())
-                        ? geminiResponseText
-                        : "Xin lỗi, tôi không hiểu rõ yêu cầu của bạn. Bạn có thể diễn đạt lại không?\n\n"
-                          + "Ví dụ: \"Danh sách sinh viên nguy cơ\", \"Xem điểm MSSV 110122001\", \"Thống kê lớp học\"";
-                saveChatHistory(username, request.getMessage(), fallbackResponse, "UNKNOWN");
-                return createResponse(fallbackResponse, "UNKNOWN", confidence, entities);
+                String fallback = "Xin lỗi, tôi chưa hiểu rõ yêu cầu của bạn. Bạn có thể hỏi về:\n"
+                        + "• Điểm số, chuyên cần\n"
+                        + "• Sinh viên nguy cơ thôi học\n"
+                        + "• Cấu hình hệ thống (admin)\n"
+                        + "• Lớp chủ nhiệm (cố vấn)";
+                saveChatHistory(username, request.getMessage(), fallback, "UNKNOWN");
+                return createResponse(fallback, "UNKNOWN", confidence, entities);
             }
-            
-            // Bước 3: Xử lý theo intent
+
+            // Bước 2: Xử lý theo intent
             String responseText = processIntent(intent, entities, username, role);
-            
-            // Nếu không có response từ business logic, dùng response từ Gemini
-            if (responseText == null || responseText.isEmpty()) {
-                responseText = geminiResponseText;
-            }
+
             if (responseText == null || responseText.isBlank()) {
-                responseText = "🤔 Tôi chưa hiểu rõ yêu cầu. Bạn có thể hỏi về điểm số, chuyên cần, sinh viên nguy cơ hoặc thống kê lớp.";
+                responseText = responseGenerator.dataMissing();
             }
-            
-            // Bước 4: Lưu chat history
+
             saveChatHistory(username, request.getMessage(), responseText, intent);
-            
-            // Bước 5: Trả về response
             return createResponse(responseText, intent, confidence, entities);
-            
+
         } catch (Exception e) {
             log.error("Error handling message: {}", e.getMessage(), e);
-            String errorResponse = "Xin lỗi, đã xảy ra lỗi khi xử lý tin nhắn của bạn. Vui lòng thử lại.";
+            String errorResponse = "Xin lỗi, đã xảy ra lỗi khi xử lý tin nhắn của bạn.";
             saveChatHistory(resolveUsername(request), request.getMessage(), errorResponse, "ERROR");
             return createResponse(errorResponse, "ERROR", 0.0, new HashMap<>());
         }
     }
 
     private String resolveUsername(ChatRequestDTO request) {
-        if (request.getUsername() != null && !request.getUsername().isBlank()) {
-            return request.getUsername();
-        }
-        if (request.getUserId() != null) {
-            return "user-" + request.getUserId();
-        }
+        if (request.getUsername() != null && !request.getUsername().isBlank()) return request.getUsername();
+        if (request.getUserId() != null) return "user-" + request.getUserId();
         return "guest";
     }
 
     private String resolveRole(ChatRequestDTO request) {
-        if (request.getRole() != null && !request.getRole().isBlank()) {
-            return request.getRole();
-        }
-        return "LECTURER";
+        if (request.getRole() != null && !request.getRole().isBlank()) return request.getRole();
+        return "STUDENT";
     }
 
-    /**
-     * Xử lý business logic theo intent
-     */
-    private String processIntent(String intent, Map<String, String> entities, String username, String role) {
-        log.info("Processing intent: {} with entities: {}", intent, entities);
-        
-        try {
-            switch (intent) {
-                // ============ GREETING & CHITCHAT ============
-                case "GREET":
-                    return handleGreeting(role);
-                    
-                case "GOODBYE":
-                    return "Tạm biệt! Chúc bạn một ngày tốt lành. 👋";
-                    
-                case "THANK":
-                    return "Không có gì! Rất vui được giúp đỡ bạn. 😊";
+    // ============================================================
+    // INTENT ROUTING
+    // ============================================================
 
-                case "HELP":
-                    return handleHelp(role);
-                    
-                // ============ STUDENT QUERIES ============
-                case "LIST_OWN_GRADES":
-                case "QUERY_STUDENT_GRADES":
-                    return handleStudentGrades(entities, username, role);
-                    
-                case "CHECK_OWN_RISK_STATUS":
-                case "QUERY_STUDENT_ATTENDANCE":
-                    return handleStudentAttendance(entities, username, role);
-                    
-                case "QUERY_STUDENT_INFO":
-                    return handleStudentInfo(entities, username, role);
-                    
-                case "QUERY_STUDENT_LAST_ACCESS":
-                    return handleLastAccess(entities, username, role);
-                    
-                case "QUERY_STUDENT_FULL_REPORT":
-                    return handleFullReport(entities, username, role);
-                    
-                case "GET_IMPROVEMENT_SUGGESTIONS":
-                    return handleImprovementSuggestions(entities, username, role);
-                    
-                // ============ RISK & WARNING ============
-                case "QUERY_RISK_STATUS":
-                    return handleRiskStatus(entities, username, role);
-                    
-                case "QUERY_AT_RISK_LIST":
-                case "QUERY_RED_ALERT_LIST":
-                case "QUERY_YELLOW_ALERT_LIST":
-                    return handleAtRiskList(intent, entities, username, role);
-                    
-                // ============ CLASS & STATISTICS ============
-                case "QUERY_CLASS_LIST":
-                    return handleClassList(username, role);
-                    
-                case "QUERY_CLASS_SUMMARY":
-                case "VIEW_CLASS_RISK_SUMMARY":
-                    return handleClassSummary(entities, username, role);
-                    
-                case "QUERY_GRADE_STATISTICS":
-                case "QUERY_ATTENDANCE_STATISTICS":
-                    return handleStatistics(intent, entities, username, role);
-                    
-                case "CHECK_SUBMISSIONS_AND_REMIND":
-                    return handleSubmissionRemind(entities, username, role);
-                    
-                case "FILTER_COURSE_RISK":
-                    return handleCourseRiskFilter(entities, username, role);
-                    
-                case "QUERY_STUDENT_INFO_NLP":
-                    return handleStudentInfo(entities, username, role);
-                    
-                case "FIND_INACTIVE_STUDENTS":
-                    return handleFindInactiveStudents(entities, username, role);
-                    
-                // ============ ACTIONS ============
-                case "ACTION_SEND_WARNING_NOTIFICATION":
-                    return handleSendNotification(entities, username, role);
-                    
-                // ============ ADMIN FUNCTIONS ============
-                case "CONFIG_WARNING_THRESHOLD":
-                    return handleConfigThreshold(entities, username, role);
-                    
-                case "TRIGGER_MOODLE_SYNC":
-                    return handleTriggerSync(entities, username, role);
-                    
-                case "ADMIN_VIEW_SYSTEM_STATS":
-                    return handleSystemStats(username, role);
-                    
-                case "ADMIN_CHECK_API_STATUS":
-                    return handleCheckApiStatus(username, role);
-                    
-                // ============ PERMISSION DENIED ============
-                case "PERMISSION_DENIED":
-                    // LOG để debug
-                    log.warn("Received PERMISSION_DENIED intent for user: {}, role: {}, entities: {}", 
-                            username, role, entities);
-                    
-                    return "🔒 Bạn không có quyền thực hiện thao tác này. Vui lòng liên hệ quản trị viên.";
-                    
-                // ============ UNKNOWN ============
-                case "UNKNOWN":
-                default:
-                    return "🤔 Tôi chưa hiểu rõ yêu cầu của bạn. Bạn có thể hỏi về:\n" +
-                           "• Điểm số sinh viên\n" +
-                           "• Chuyên cần lớp học\n" +
-                           "• Danh sách sinh viên nguy cơ\n" +
-                           "• Thống kê lớp học";
-            }
+    private String processIntent(String intent, Map<String, String> entities, String username, String role) {
+        try {
+            return switch (intent) {
+                // CHITCHAT - dùng ResponseGenerator cho câu trả lời đa dạng
+                case "GREET" -> responseGenerator.greet(role, username);
+                case "GOODBYE" -> responseGenerator.goodbye();
+                case "THANK" -> responseGenerator.thank();
+                case "HELP" -> responseGenerator.help(role);
+
+                // ADMIN
+                case "CONFIG_WARNING_THRESHOLD" -> handleConfigThreshold(entities, role);
+                case "TRIGGER_MOODLE_SYNC" -> handleTriggerSync(entities, role);
+                case "ADMIN_VIEW_SYSTEM_STATS" -> handleSystemStats(role);
+                case "ADMIN_CHECK_API_STATUS" -> handleCheckApiStatus(role);
+
+                // STUDENT
+                case "LIST_OWN_GRADES", "QUERY_STUDENT_GRADES" -> handleStudentGrades(entities, username, role);
+                case "CHECK_OWN_RISK_STATUS", "QUERY_STUDENT_ATTENDANCE" -> handleStudentAttendance(entities, username, role);
+                case "GET_IMPROVEMENT_SUGGESTIONS" -> handleImprovementSuggestions(entities, role);
+                case "QUERY_STUDENT_INFO" -> handleStudentInfo(entities, username, role);
+                case "QUERY_STUDENT_LAST_ACCESS" -> handleLastAccess(entities, username, role);
+                case "QUERY_STUDENT_FULL_REPORT" -> handleFullReport(entities, username, role);
+
+                // LECTURER
+                case "CHECK_SUBMISSIONS_AND_REMIND" -> handleSubmissionRemind(entities, role);
+                case "FILTER_COURSE_RISK" -> handleCourseRiskFilter(entities, role);
+                case "QUERY_STUDENT_INFO_NLP" -> handleStudentInfo(entities, username, role);
+
+                // ADVISER
+                case "VIEW_CLASS_RISK_SUMMARY" -> handleClassRiskSummary(entities, role);
+                case "FIND_INACTIVE_STUDENTS" -> handleFindInactiveStudents(entities, role);
+
+                // GENERAL
+                case "QUERY_AT_RISK_LIST", "QUERY_RED_ALERT_LIST", "QUERY_YELLOW_ALERT_LIST" -> handleAtRiskList(intent, entities, role);
+                case "QUERY_CLASS_SUMMARY" -> handleClassSummary(entities, role);
+                case "QUERY_RISK_STATUS" -> handleRiskStatus(entities, username, role);
+                case "ACTION_SEND_WARNING_NOTIFICATION" -> handleSendNotification(entities, role);
+
+                case "PERMISSION_DENIED" -> responseGenerator.permissionDenied(role, intent);
+
+                default -> responseGenerator.unknown(role);
+            };
         } catch (Exception e) {
             log.error("Error processing intent {}: {}", intent, e.getMessage(), e);
             return "Xin lỗi, đã xảy ra lỗi khi xử lý yêu cầu của bạn.";
@@ -265,491 +167,957 @@ public class ChatbotService {
     }
 
     // ============================================================
-    // HELPER METHODS - Gọi MoodleRestController
+    // CHITCHAT
     // ============================================================
-
-    private String handleHelp(String role) {
-        if ("STUDENT".equals(role)) {
-            return "Tôi có thể giúp bạn:\n"
-                    + "• \"Điểm của tôi môn Java\"\n"
-                    + "• \"Chuyên cần của tôi\"\n"
-                    + "• \"Tình trạng học tập của tôi\"";
-        }
-        return "Tôi có thể giúp Thầy/Cô:\n"
-                + "• \"Danh sách sinh viên nguy cơ\"\n"
-                + "• \"Điểm sinh viên 110122001\"\n"
-                + "• \"Thống kê lớp học\"\n"
-                + "• \"Sinh viên mức đỏ\"";
-    }
 
     private String handleGreeting(String role) {
         if ("LECTURER".equals(role) || "ADMIN".equals(role)) {
-            return "Xin chào Thầy/Cô! 👋\n\nTôi là EduGuard, trợ lý hỗ trợ theo dõi tiến độ học tập. " +
-                   "Tôi có thể giúp Thầy/Cô:\n" +
-                   "📊 Xem điểm và chuyên cần sinh viên\n" +
-                   "⚠️ Theo dõi sinh viên có nguy cơ cao\n" +
-                   "📈 Thống kê tổng quan lớp học\n" +
-                   "📨 Gửi cảnh báo và thông báo";
-        } else {
-            return "Xin chào Bạn! 👋\n\nTôi là EduGuard, trợ lý hỗ trợ học tập. " +
-                   "Tôi có thể giúp bạn:\n" +
-                   "📊 Xem điểm số của mình\n" +
-                   "📅 Kiểm tra chuyên cần\n" +
-                   "⚠️ Xem tình trạng học tập";
+            return "Xin chào Thầy/Cô! 👋\n\nTôi là EduGuard - trợ lý hỗ trợ theo dõi tiến độ học tập.\n\n"
+                    + "Tôi có thể giúp Thầy/Cô:\n"
+                    + "📊 Xem điểm và chuyên cần sinh viên\n"
+                    + "⚠️ Theo dõi sinh viên có nguy cơ cao\n"
+                    + "📈 Thống kê tổng quan lớp học\n"
+                    + "📨 Gửi cảnh báo và thông báo";
         }
+        if ("ADVISER".equals(role)) {
+            return "Xin chào Cố vấn! 👋\n\nTôi là EduGuard - trợ lý hỗ trợ theo dõi sinh viên.\n\n"
+                    + "Tôi có thể giúp:\n"
+                    + "📊 Xem tình hình lớp chủ nhiệm\n"
+                    + "⚠️ Theo dõi SV nguy cơ theo lớp\n"
+                    + "📭 Tìm SV ngừng tương tác";
+        }
+        return "Xin chào Bạn! 👋\n\nTôi là EduGuard - trợ lý hỗ trợ học tập.\n\n"
+                + "Tôi có thể giúp bạn:\n"
+                + "📊 Xem điểm số của mình\n"
+                + "📅 Kiểm tra chuyên cần\n"
+                + "⚠️ Xem tình trạng học tập";
     }
+
+    private String handleHelp(String role) {
+        if ("STUDENT".equals(role)) {
+            return "📚 Hướng dẫn cho Sinh viên:\n\n"
+                    + "• \"Xem điểm của em\"\n"
+                    + "• \"Bảng điểm của em\"\n"
+                    + "• \"Chuyên cần của em\"\n"
+                    + "• \"Em có bị cảnh báo không?\"\n"
+                    + "• \"Làm sao để cải thiện điểm môn Java?\"";
+        }
+        if ("LECTURER".equals(role)) {
+            return "📚 Hướng dẫn cho Giảng viên:\n\n"
+                    + "• \"Lớp Java có ai chưa nộp bài?\"\n"
+                    + "• \"Môn CSDL có bao nhiêu SV mức đỏ?\"\n"
+                    + "• \"Sinh viên 110122001 có đủ điều kiện thi không?\"\n"
+                    + "• \"Kiểm tra điểm MSSV 110122223\"";
+        }
+        if ("ADVISER".equals(role)) {
+            return "📚 Hướng dẫn cho Cố vấn học tập:\n\n"
+                    + "• \"Lớp DA22TTB có bao nhiêu SV bị cảnh báo?\"\n"
+                    + "• \"Sinh viên ngừng tương tác lớp tôi\"\n"
+                    + "• \"Danh sách SV mức đỏ lớp cố vấn\"\n"
+                    + "• \"Tình hình học vụ tổng quan lớp\"";
+        }
+        return "📚 Hướng dẫn cho Quản trị viên:\n\n"
+                + "• \"Cấu hình ngưỡng cảnh báo\"\n"
+                + "• \"Đồng bộ dữ liệu Moodle\"\n"
+                + "• \"Kiểm tra trạng thái API\"\n"
+                + "• \"Thống kê hệ thống\"";
+    }
+
+    // ============================================================
+    // STUDENT HANDLERS
+    // ============================================================
 
     private String handleStudentGrades(Map<String, String> entities, String username, String role) {
         String studentId = entities.getOrDefault("mssv", username);
         String courseName = entities.get("course_name");
-        
-        // PHÂN QUYỀN: Sinh viên chỉ được xem điểm của mình
+
         if ("STUDENT".equals(role)) {
-            // Sinh viên hỏi về người khác → từ chối
             if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
-                return "🔒 Bạn chỉ có thể xem điểm của chính mình. Vui lòng hỏi: \"Điểm của tôi\"";
+                return responseGenerator.gradesPermissionDenied();
             }
-            // Force studentId = username (không cho sinh viên chỉ định MSSV khác)
             studentId = username;
         }
-        // LECTURER và ADMIN có thể xem điểm bất kỳ sinh viên nào
-        
-        // Gọi API
-        ResponseEntity<?> response = moodleRestController.getStudentGrades(studentId, courseName);
-        return formatResponse(response);
+
+        Optional<Map<String, Object>> userOpt = directQuery.findUserByUsername(studentId);
+        if (userOpt.isEmpty()) {
+            return responseGenerator.gradesNotFound(studentId);
+        }
+        long userId = ((Number) userOpt.get().get("id")).longValue();
+        String fullName = (String) userOpt.get().get("fullname");
+
+        List<Map<String, Object>> courses = directQuery.findEnrolledCourses(userId);
+        if (courses.isEmpty()) {
+            return responseGenerator.gradesNoCourses(studentId, fullName);
+        }
+
+        // Lọc môn khớp nếu có yêu cầu
+        List<Map<String, Object>> filteredCourses = new ArrayList<>();
+        if (courseName != null && !courseName.isBlank()) {
+            for (Map<String, Object> c : courses) {
+                String cname = (String) c.get("fullname");
+                if (cname != null && cname.toLowerCase().contains(courseName.toLowerCase())) {
+                    filteredCourses.add(c);
+                }
+            }
+            if (filteredCourses.isEmpty()) {
+                return responseGenerator.gradesNoMatch(courseName);
+            }
+        } else {
+            filteredCourses = courses;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(responseGenerator.gradesHeader(studentId, fullName, filteredCourses.size())).append("\n\n");
+
+        for (Map<String, Object> c : filteredCourses) {
+            long courseId = ((Number) c.get("id")).longValue();
+            String cname = (String) c.get("fullname");
+            sb.append("📘 ").append(cname).append("\n");
+
+            // Lấy danh sách từng bài tập
+            List<Map<String, Object>> assigns = directQuery.findAssignmentGrades(courseId, userId);
+            if (assigns.isEmpty()) {
+                sb.append(responseGenerator.gradesEmptyCourse(cname)).append("\n\n");
+                continue;
+            }
+
+            double sumGrade = 0;
+            int gradeCount = 0;
+            int submittedCount = 0;
+
+            for (Map<String, Object> a : assigns) {
+                String aname = (String) a.get("assignname");
+                Object gradeObj = a.get("grade");
+                Object maxObj = a.get("maxgrade");
+                String status = (String) a.get("submitstatus");
+                long submittedAt = a.get("submittedat") != null ? ((Number) a.get("submittedat")).longValue() : 0;
+
+                double grade = gradeObj != null ? ((Number) gradeObj).doubleValue() : 0.0;
+                double maxGrade = maxObj != null ? ((Number) maxObj).doubleValue() : 100.0;
+
+                if ("submitted".equals(status)) submittedCount++;
+                if (grade > 0) {
+                    sumGrade += grade;
+                    gradeCount++;
+                } else if ("submitted".equals(status)) {
+                    gradeCount++;
+                }
+
+                int daysAgo = submittedAt > 0 ? (int) ((System.currentTimeMillis() / 1000 - submittedAt) / 86400) : -1;
+                sb.append(responseGenerator.gradeLine(aname, grade, maxGrade, status, daysAgo)).append("\n");
+            }
+
+            double avg = gradeCount > 0 ? sumGrade / gradeCount : 0.0;
+            sb.append(responseGenerator.gradesFooter(submittedCount, assigns.size(), avg)).append("\n");
+        }
+        return sb.toString();
     }
 
     private String handleStudentAttendance(Map<String, String> entities, String username, String role) {
         String studentId = entities.getOrDefault("mssv", username);
         String courseName = entities.get("course_name");
-        
-        // PHÂN QUYỀN: Sinh viên chỉ được xem chuyên cần của mình
+
         if ("STUDENT".equals(role)) {
             if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
-                return "🔒 Bạn chỉ có thể xem chuyên cần của chính mình.";
+                return responseGenerator.permissionDenied(role, "CHECK_OWN_RISK_STATUS");
             }
             studentId = username;
         }
-        
-        ResponseEntity<?> response = moodleRestController.getAttendance(studentId, courseName);
-        return formatResponse(response);
+
+        Optional<Map<String, Object>> userOpt = directQuery.findUserByUsername(studentId);
+        if (userOpt.isEmpty()) {
+            return responseGenerator.gradesNotFound(studentId);
+        }
+        Map<String, Object> user = userOpt.get();
+        long userId = ((Number) user.get("id")).longValue();
+        String fullName = (String) user.get("fullname");
+        long daysAccess = directQuery.getDaysSinceAccess(userId);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(responseGenerator.attendanceHeader(fullName, studentId)).append("\n\n");
+        sb.append(responseGenerator.attendanceLastAccess(daysAccess)).append("\n");
+        sb.append(responseGenerator.attendanceWarning(daysAccess)).append("\n\n");
+
+        // Thêm điểm
+        sb.append(responseGenerator.gradesListHeader()).append("\n");
+        List<Map<String, Object>> courses = directQuery.findEnrolledCourses(userId);
+        for (Map<String, Object> c : courses) {
+            long courseId = ((Number) c.get("id")).longValue();
+            String cname = (String) c.get("fullname");
+            if (courseName != null && !courseName.isBlank() && !cname.toLowerCase().contains(courseName.toLowerCase())) {
+                continue;
+            }
+            Map<String, Object> grade = directQuery.getCourseAverageGrade(courseId, userId);
+            double avg = ((Number) grade.get("avgGrade")).doubleValue();
+            boolean has = (Boolean) grade.get("hasGrades");
+            sb.append(responseGenerator.courseLine(cname, avg, has)).append("\n");
+        }
+        return sb.toString();
+    }
+
+    private String handleImprovementSuggestions(Map<String, String> entities, String role) {
+        if (!"STUDENT".equals(role)) {
+            return responseGenerator.improvementForNonStudent();
+        }
+        String courseName = entities.getOrDefault("course_name", "môn học của em");
+        return responseGenerator.improvement(courseName, 0);
+    }
+
+    // ============================================================
+    // LECTURER HANDLERS
+    // ============================================================
+
+    private String handleSubmissionRemind(Map<String, String> entities, String role) {
+        if ("STUDENT".equals(role)) {
+            return responseGenerator.submissionStudentDenied();
+        }
+
+        String courseName = entities.get("course_name");
+        if (courseName == null) {
+            return responseGenerator.submissionAskCourse();
+        }
+
+        String activityType = "Assignment";
+        String lower = courseName.toLowerCase();
+        if (lower.contains("quiz")) activityType = "Quiz";
+        else if (lower.contains("lab")) activityType = "Lab";
+
+        ResponseEntity<?> response = moodleRestController.getMissingSubmissions(courseName, activityType);
+        return formatMissingSubmissionsResponse(response, courseName, activityType);
+    }
+
+    private String handleCourseRiskFilter(Map<String, String> entities, String role) {
+        if ("STUDENT".equals(role)) {
+            return responseGenerator.studentPermissionDenied();
+        }
+
+        String courseName = entities.get("course_name");
+        String riskLevel = entities.getOrDefault("risk_level", "yellow");
+        if (riskLevel.equals("cao")) riskLevel = "red";
+        if (riskLevel.equals("trung bình") || riskLevel.equals("thấp")) riskLevel = "yellow";
+
+        if (courseName == null) {
+            return responseGenerator.courseRiskAskCourse();
+        }
+
+        Optional<Map<String, Object>> courseOpt = directQuery.findCourseByKeyword(courseName);
+        if (courseOpt.isEmpty()) {
+            return responseGenerator.courseRiskNotFound(courseName);
+        }
+        Map<String, Object> course = courseOpt.get();
+        long courseId = ((Number) course.get("id")).longValue();
+        String realCourseName = (String) course.get("fullname");
+
+        List<Map<String, Object>> enrolled = directQuery.findEnrolledStudents(courseId);
+        if (enrolled.isEmpty()) {
+            return responseGenerator.courseRiskNoEnrollment(realCourseName);
+        }
+
+        List<Map<String, Object>> atRisk = new ArrayList<>();
+        int redCount = 0, yellowCount = 0, greenCount = 0;
+        for (Map<String, Object> stu : enrolled) {
+            long userId = ((Number) stu.get("id")).longValue();
+            Map<String, Object> grade = directQuery.getCourseAverageGrade(courseId, userId);
+            long daysAccess = directQuery.getDaysSinceAccess(userId);
+            double avg = ((Number) grade.get("avgGrade")).doubleValue();
+            boolean hasGrades = (Boolean) grade.get("hasGrades");
+
+            String level = "green";
+            if ((hasGrades && avg < 50) || daysAccess > 14) {
+                level = "red";
+            } else if ((hasGrades && avg < 80) || daysAccess > 7) {
+                level = "yellow";
+            }
+            if ("red".equals(level)) redCount++;
+            else if ("yellow".equals(level)) yellowCount++;
+            else greenCount++;
+
+            // Lọc theo mức yêu cầu (chính xác)
+            boolean match = false;
+            if ("red".equals(riskLevel) && "red".equals(level)) match = true;
+            else if ("yellow".equals(riskLevel) && "yellow".equals(level)) match = true;
+            else if ("green".equals(riskLevel) && "green".equals(level)) match = true;
+            else if ("all".equals(riskLevel)) match = true;
+
+            if (match) {
+                Map<String, Object> row = new LinkedHashMap<>(stu);
+                row.put("avgGrade", avg);
+                row.put("hasGrades", hasGrades);
+                row.put("daysSinceAccess", daysAccess);
+                row.put("riskLevel", level);
+                atRisk.add(row);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(responseGenerator.courseRiskHeader(realCourseName)).append("\n\n");
+        sb.append(responseGenerator.courseRiskSummary(redCount, yellowCount, greenCount, enrolled.size()));
+
+        if (atRisk.isEmpty()) {
+            sb.append(responseGenerator.courseRiskNoMatch(riskLevel));
+        } else {
+            sb.append(responseGenerator.courseRiskListHeader(riskLevel)).append("\n");
+            int idx = 1;
+            for (Map<String, Object> s : atRisk) {
+                String icon = "🟢";
+                String level = (String) s.get("riskLevel");
+                if ("yellow".equals(level)) icon = "🟡";
+                if ("red".equals(level)) icon = "🔴";
+                sb.append(responseGenerator.courseRiskRow(idx++, icon,
+                        (String) s.get("username"),
+                        (String) s.get("fullname"),
+                        ((Number) s.get("avgGrade")).doubleValue(),
+                        (Boolean) s.get("hasGrades"),
+                        ((Number) s.get("daysSinceAccess")).longValue()));
+            }
+            // Auto gửi thông báo cho giáo viên phụ trách + cố vấn (mức đỏ)
+            if ("red".equals(riskLevel)) {
+                try {
+                    int notifSent = 0;
+                    for (Map<String, Object> s : atRisk) {
+                        if ("red".equals(s.get("riskLevel"))) {
+                            long sid = ((Number) s.get("id")).longValue();
+                            String reason = (Boolean) s.get("hasGrades")
+                                    ? "Điểm TB thấp + không online " + s.get("daysSinceAccess") + " ngày"
+                                    : "Chưa có điểm và không online " + s.get("daysSinceAccess") + " ngày";
+                            notifSent += notificationService.notifyViolation(sid, courseId, "red", reason);
+                        }
+                    }
+                    if (notifSent > 0) {
+                        sb.append(responseGenerator.courseRiskNotifSent(notifSent));
+                    }
+                } catch (Exception ex) {
+                    log.warn("Auto notification failed: {}", ex.getMessage());
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private String handleStudentInfo(Map<String, String> entities, String username, String role) {
         String studentId = entities.getOrDefault("mssv", username);
-        
-        // PHÂN QUYỀN: Sinh viên chỉ xem thông tin của mình
+
         if ("STUDENT".equals(role)) {
             if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
-                return "🔒 Bạn chỉ có thể xem thông tin của chính mình.";
+                return responseGenerator.permissionDenied(role, "QUERY_STUDENT_INFO_NLP");
             }
             studentId = username;
         }
-        
-        ResponseEntity<?> response = moodleRestController.getStudentStatus(studentId);
-        return formatResponse(response);
+
+        Optional<Map<String, Object>> userOpt = directQuery.findUserByUsername(studentId);
+        if (userOpt.isEmpty()) {
+            return responseGenerator.gradesNotFound(studentId);
+        }
+        Map<String, Object> user = userOpt.get();
+        long userId = ((Number) user.get("id")).longValue();
+        String fullName = (String) user.get("fullname");
+        long daysAccess = directQuery.getDaysSinceAccess(userId);
+
+        // Lấy danh sách môn + điểm
+        List<Map<String, Object>> courses = directQuery.findEnrolledCourses(userId);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("👤 THÔNG TIN SINH VIÊN\n\n");
+        sb.append("🆔 MSSV: ").append(studentId).append("\n");
+        sb.append("📛 Họ tên: ").append(fullName).append("\n");
+        sb.append("📧 Email: ").append(user.get("email") != null ? user.get("email") : "-").append("\n");
+        sb.append(responseGenerator.attendanceLastAccess(daysAccess)).append("\n");
+        sb.append("🏫 Khoa: ").append(user.get("department") != null ? user.get("department") : "Khoa CNTT").append("\n");
+        sb.append("📚 Tổng số môn đang học: ").append(courses.size()).append("\n\n");
+
+        // Trạng thái rủi ro tổng quan
+        int red = 0, yellow = 0, green = 0;
+        for (Map<String, Object> c : courses) {
+            long cid = ((Number) c.get("id")).longValue();
+            Map<String, Object> grade = directQuery.getCourseAverageGrade(cid, userId);
+            double avg = ((Number) grade.get("avgGrade")).doubleValue();
+            boolean has = (Boolean) grade.get("hasGrades");
+            if ((has && avg < 50) || daysAccess > 14) red++;
+            else if ((has && avg < 80) || daysAccess > 7) yellow++;
+            else green++;
+        }
+        sb.append(responseGenerator.classSummaryStats(red, yellow, green, courses.size())).append("\n");
+
+        if (!courses.isEmpty()) {
+            sb.append("📚 Chi tiết các môn:\n");
+            for (Map<String, Object> c : courses) {
+                long cid = ((Number) c.get("id")).longValue();
+                Map<String, Object> grade = directQuery.getCourseAverageGrade(cid, userId);
+                double avg = ((Number) grade.get("avgGrade")).doubleValue();
+                boolean has = (Boolean) grade.get("hasGrades");
+                int items = ((Number) grade.get("itemsCount")).intValue();
+                String level = "green";
+                if ((has && avg < 50) || daysAccess > 14) level = "red";
+                else if ((has && avg < 70) || daysAccess > 7) level = "yellow";
+
+                String icon = "🟢";
+                if ("yellow".equals(level)) icon = "🟡";
+                if ("red".equals(level)) icon = "🔴";
+
+                sb.append("  ").append(icon).append(" ").append(c.get("fullname"));
+                if (has) {
+                    sb.append(" - TB: ").append(String.format("%.2f", avg)).append(" / 100 (").append(items).append(" bài)");
+                } else {
+                    sb.append(" - chưa có điểm");
+                }
+                sb.append("\n");
+            }
+        }
+        return sb.toString();
     }
 
     private String handleLastAccess(Map<String, String> entities, String username, String role) {
         String studentId = entities.getOrDefault("mssv", username);
-        
-        // PHÂN QUYỀN: Sinh viên chỉ xem last access của mình
+
         if ("STUDENT".equals(role)) {
             if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
-                return "🔒 Bạn chỉ có thể xem hoạt động của chính mình.";
+                return responseGenerator.permissionDenied(role, "QUERY_STUDENT_LAST_ACCESS");
             }
             studentId = username;
         }
-        
+
         ResponseEntity<?> response = moodleRestController.getLastAccess(studentId);
-        return formatResponse(response);
+        return formatLastAccessResponse(response);
     }
 
     private String handleFullReport(Map<String, String> entities, String username, String role) {
         String studentId = entities.getOrDefault("mssv", username);
-        
-        // PHÂN QUYỀN: Sinh viên chỉ xem báo cáo của mình
+
         if ("STUDENT".equals(role)) {
             if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
-                return "🔒 Bạn chỉ có thể xem báo cáo của chính mình.";
+                return responseGenerator.permissionDenied(role, "QUERY_STUDENT_FULL_REPORT");
             }
             studentId = username;
         }
-        
-        // Kết hợp nhiều API calls
-        StringBuilder report = new StringBuilder();
-        report.append("📋 BÁO CÁO ĐẦY ĐỦ SINH VIÊN\n\n");
-        
-        // Grades
-        ResponseEntity<?> gradesResp = moodleRestController.getStudentGrades(studentId, null);
-        report.append(formatResponse(gradesResp)).append("\n\n");
-        
-        // Attendance
-        ResponseEntity<?> attendResp = moodleRestController.getAttendance(studentId, null);
-        report.append(formatResponse(attendResp)).append("\n\n");
-        
-        // Status
-        ResponseEntity<?> statusResp = moodleRestController.getStudentStatus(studentId);
-        report.append(formatResponse(statusResp));
-        
+
+        StringBuilder report = new StringBuilder("📋 BÁO CÁO ĐẦY ĐỦ\n\n");
+        report.append(formatStudentStatusResponse(moodleRestController.getStudentStatus(studentId)));
+        report.append("\n\n").append(formatGradesResponse(moodleRestController.getStudentGrades(studentId, null)));
         return report.toString();
+    }
+
+    // ============================================================
+    // ADVISER HANDLERS
+    // ============================================================
+
+    private String handleClassRiskSummary(Map<String, String> entities, String role) {
+        if ("STUDENT".equals(role)) {
+            return responseGenerator.studentPermissionDenied();
+        }
+
+        String classCode = entities.get("class_code");
+        if (classCode == null || classCode.isBlank()) {
+            // Lấy tất cả cohorts làm gợi ý
+            List<Map<String, Object>> cohorts = directQuery.findAllCohorts();
+            return responseGenerator.classSummaryAskClass(cohorts);
+        }
+
+        List<Map<String, Object>> students = directQuery.findStudentsByCohortName(classCode);
+        if (students.isEmpty()) {
+            return responseGenerator.classSummaryNotFound(classCode);
+        }
+
+        int red = 0, yellow = 0, green = 0;
+        List<Map<String, Object>> atRiskStudents = new ArrayList<>();
+
+        for (Map<String, Object> stu : students) {
+            long userId = ((Number) stu.get("id")).longValue();
+            long daysAccess = directQuery.getDaysSinceAccess(userId);
+            String level = "green";
+            if (daysAccess > 14) level = "red";
+            else if (daysAccess > 7) level = "yellow";
+
+            if ("red".equals(level)) red++;
+            else if ("yellow".equals(level)) yellow++;
+            else green++;
+
+            if (!"green".equals(level)) {
+                Map<String, Object> row = new LinkedHashMap<>(stu);
+                row.put("daysSinceAccess", daysAccess);
+                row.put("riskLevel", level);
+                atRiskStudents.add(row);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(responseGenerator.classSummaryHeader(classCode)).append("\n\n");
+        sb.append(responseGenerator.classSummaryStats(red, yellow, green, students.size()));
+
+        if (atRiskStudents.isEmpty()) {
+            sb.append(responseGenerator.classSummaryAllGood());
+        } else {
+            sb.append(responseGenerator.classSummaryAtRiskHeader(atRiskStudents.size())).append("\n");
+            int idx = 1;
+            for (Map<String, Object> s : atRiskStudents) {
+                String icon = "🟡";
+                if ("red".equals(s.get("riskLevel"))) icon = "🔴";
+                sb.append(responseGenerator.classSummaryRow(idx++, icon,
+                        (String) s.get("username"),
+                        (String) s.get("fullname"),
+                        ((Number) s.get("daysSinceAccess")).longValue())).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    private String handleFindInactiveStudents(Map<String, String> entities, String role) {
+        if ("STUDENT".equals(role)) {
+            return responseGenerator.studentPermissionDenied();
+        }
+
+        int inactiveDays = 14;
+        if (entities.containsKey("inactive_days")) {
+            try {
+                inactiveDays = Integer.parseInt(entities.get("inactive_days"));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        String classCode = entities.get("class_code");
+        List<Map<String, Object>> students;
+        if (classCode != null && !classCode.isBlank()) {
+            students = directQuery.findStudentsByCohortName(classCode);
+        } else {
+            // Lấy tất cả SV (username bắt đầu 1101)
+            students = directQuery.findAllStudents();
+        }
+
+        List<Map<String, Object>> inactive = new ArrayList<>();
+        for (Map<String, Object> stu : students) {
+            long userId = ((Number) stu.get("id")).longValue();
+            long days = directQuery.getDaysSinceAccess(userId);
+            if (days >= inactiveDays) {
+                Map<String, Object> row = new LinkedHashMap<>(stu);
+                row.put("daysSinceAccess", days);
+                inactive.add(row);
+            }
+        }
+
+        if (inactive.isEmpty()) {
+            return responseGenerator.inactiveStudentsEmpty(inactiveDays, classCode);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(responseGenerator.inactiveStudentsHeader(inactiveDays)).append("\n\n");
+        if (classCode != null) sb.append("Lớp: ").append(classCode).append("\n");
+        sb.append(responseGenerator.inactiveStudentsCount(inactive.size(), classCode)).append("\n");
+        int idx = 1;
+        for (Map<String, Object> s : inactive) {
+            sb.append(responseGenerator.inactiveStudentRow(idx++,
+                    (String) s.get("username"),
+                    (String) s.get("fullname"),
+                    ((Number) s.get("daysSinceAccess")).longValue())).append("\n");
+        }
+        return sb.toString();
+    }
+
+    // ============================================================
+    // ADMIN HANDLERS
+    // ============================================================
+
+    private String handleConfigThreshold(Map<String, String> entities, String role) {
+        if (!"ADMIN".equals(role)) {
+            return responseGenerator.adminPermissionDenied();
+        }
+        return responseGenerator.configThreshold();
+    }
+
+    private String handleTriggerSync(Map<String, String> entities, String role) {
+        if (!"ADMIN".equals(role)) {
+            return responseGenerator.adminPermissionDenied();
+        }
+        return responseGenerator.triggerSync();
+    }
+
+    private String handleSystemStats(String role) {
+        if (!"ADMIN".equals(role)) {
+            return responseGenerator.adminPermissionDenied();
+        }
+        ResponseEntity<?> response = moodleRestController.getClassOverview();
+        return formatResponse(response);
+    }
+
+    private String handleCheckApiStatus(String role) {
+        if (!"ADMIN".equals(role)) {
+            return responseGenerator.adminPermissionDenied();
+        }
+        return responseGenerator.checkApiStatus();
+    }
+
+    // ============================================================
+    // GENERAL HANDLERS
+    // ============================================================
+
+    private String handleAtRiskList(String intent, Map<String, String> entities, String role) {
+        if ("STUDENT".equals(role)) {
+            return responseGenerator.studentPermissionDenied();
+        }
+
+        String riskLevel = null;
+        if ("QUERY_RED_ALERT_LIST".equals(intent)) riskLevel = "red";
+        else if ("QUERY_YELLOW_ALERT_LIST".equals(intent)) riskLevel = "yellow";
+        else riskLevel = entities.get("risk_level");
+
+        // LỌC CHỈ SINH VIÊN VI PHẠM
+        ResponseEntity<?> response = moodleRestController.getAtRiskStudents(riskLevel, 50.0, 1, 14, true);
+        return formatAtRiskStudentsResponse(response, true);
+    }
+
+    private String handleClassSummary(Map<String, String> entities, String role) {
+        if ("STUDENT".equals(role)) {
+            return responseGenerator.studentPermissionDenied();
+        }
+        ResponseEntity<?> response = moodleRestController.getClassOverview();
+        return formatResponse(response);
     }
 
     private String handleRiskStatus(Map<String, String> entities, String username, String role) {
         String studentId = entities.getOrDefault("mssv", username);
-        
-        // PHÂN QUYỀN: Sinh viên chỉ xem risk status của mình
         if ("STUDENT".equals(role)) {
             if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
-                return "🔒 Bạn chỉ có thể xem tình trạng học tập của chính mình.";
+                return responseGenerator.permissionDenied(role, "QUERY_RISK_STATUS");
             }
             studentId = username;
         }
-        
         ResponseEntity<?> response = moodleRestController.getStudentStatus(studentId);
-        return formatResponse(response);
+        return formatStudentStatusResponse(response);
     }
 
-    private String handleAtRiskList(String intent, Map<String, String> entities, String username, String role) {
-        // PHÂN QUYỀN: Sinh viên KHÔNG được xem danh sách sinh viên nguy cơ
+    private String handleSendNotification(Map<String, String> entities, String role) {
         if ("STUDENT".equals(role)) {
-            return "🔒 Chức năng này chỉ dành cho giảng viên và quản trị viên.";
+            return responseGenerator.studentPermissionDenied();
         }
-        
-        String riskLevel = null;
-        
-        if ("QUERY_RED_ALERT_LIST".equals(intent)) {
-            riskLevel = "red";
-        } else if ("QUERY_YELLOW_ALERT_LIST".equals(intent)) {
-            riskLevel = "yellow";
-        } else {
-            riskLevel = entities.get("risk_level");
-        }
-        
-        ResponseEntity<?> response = moodleRestController.getAtRiskStudents(riskLevel);
-        return formatResponse(response);
-    }
-
-    private String handleClassList(String username, String role) {
-        // Tất cả role đều có thể xem courses (nhưng sẽ filter theo quyền)
-        ResponseEntity<?> response = moodleRestController.getCourses();
-        return formatResponse(response);
-    }
-
-    private String handleClassSummary(Map<String, String> entities, String username, String role) {
-        // PHÂN QUYỀN: Sinh viên KHÔNG được xem thống kê lớp
-        if ("STUDENT".equals(role)) {
-            return "🔒 Chức năng thống kê lớp học chỉ dành cho giảng viên và quản trị viên.";
-        }
-        
-        ResponseEntity<?> response = moodleRestController.getClassOverview();
-        return formatResponse(response);
-    }
-
-    private String handleStatistics(String intent, Map<String, String> entities, String username, String role) {
-        // PHÂN QUYỀN: Sinh viên KHÔNG được xem thống kê
-        if ("STUDENT".equals(role)) {
-            return "🔒 Chức năng thống kê chỉ dành cho giảng viên và quản trị viên.";
-        }
-        
-        ResponseEntity<?> response = moodleRestController.getClassOverview();
-        return formatResponse(response);
-    }
-
-    private String handleSendNotification(Map<String, String> entities, String username, String role) {
-        // PHÂN QUYỀN: Chỉ LECTURER và ADMIN
-        if ("STUDENT".equals(role)) {
-            return "🔒 Bạn không có quyền gửi thông báo. Chức năng này chỉ dành cho giảng viên.";
-        }
-        
         String studentId = entities.get("mssv");
         String riskLevel = entities.get("risk_level");
-        String message = entities.getOrDefault("message", "Cảnh báo học tập");
-        
-        ResponseEntity<?> response = moodleRestController.sendNotification(studentId, riskLevel, message);
+        ResponseEntity<?> response = moodleRestController.sendNotification(studentId, riskLevel, "Cảnh báo học tập từ hệ thống EduGuard");
         return formatResponse(response);
     }
 
-    private String handleSystemStats(String username, String role) {
-        if (!"ADMIN".equals(role)) {
-            return "🔒 Chức năng này chỉ dành cho quản trị viên.";
-        }
-        
-        ResponseEntity<?> response = moodleRestController.getAtRiskStudents(null);
-        return formatResponse(response);
-    }
+    // ============================================================
+    // FORMAT RESPONSES
+    // ============================================================
 
-    private String handleConfigThreshold(Map<String, String> entities, String username, String role) {
-        if (!"ADMIN".equals(role)) {
-            return "🔒 Chức năng này chỉ dành cho quản trị viên.";
-        }
-        return "✅ Đã ghi nhận yêu cầu cấu hình ngưỡng cảnh báo.\n"
-                + "Bạn có thể cập nhật chi tiết trong trang quản trị hoặc file cấu hình backend.";
-    }
-
-    private String handleTriggerSync(Map<String, String> entities, String username, String role) {
-        if (!"ADMIN".equals(role)) {
-            return "🔒 Chức năng này chỉ dành cho quản trị viên.";
-        }
-        return "🔄 Đã ghi nhận yêu cầu đồng bộ Moodle.\n"
-                + "Hãy kiểm tra job sync, kết nối API, cache và log hệ thống để xác nhận kết quả.";
-    }
-
-    private String handleSubmissionRemind(Map<String, String> entities, String username, String role) {
-        if ("STUDENT".equals(role)) {
-            return "🔒 Bạn không có quyền gửi nhắc nhở cho lớp học.";
-        }
-        String courseName = entities.getOrDefault("course_name", "môn học");
-        return "📨 Tôi đã hiểu yêu cầu nhắc nhở cho " + courseName + ".\n"
-                + "Bạn có thể dùng danh sách sinh viên chưa nộp để gửi thông báo cá nhân hoá.";
-    }
-
-    private String handleCourseRiskFilter(Map<String, String> entities, String username, String role) {
-        if ("STUDENT".equals(role)) {
-            return "🔒 Chức năng này chỉ dành cho giảng viên và quản trị viên.";
-        }
-        String courseName = entities.getOrDefault("course_name", "môn học");
-        String riskLevel = entities.getOrDefault("risk_level", "all");
-        return "⚠️ Tôi đã hiểu yêu cầu lọc rủi ro cho " + courseName + " (mức: " + riskLevel + ").\n"
-                + "Hệ thống sẽ trả về danh sách sinh viên phù hợp theo bộ lọc.";
-    }
-
-    private String handleFindInactiveStudents(Map<String, String> entities, String username, String role) {
-        if ("STUDENT".equals(role)) {
-            return "🔒 Chức năng này chỉ dành cho cố vấn học tập, giảng viên và quản trị viên.";
-        }
-        return "📭 Tôi đã hiểu yêu cầu tìm sinh viên ít tương tác / không online.\n"
-                + "Hệ thống sẽ lọc theo thời gian không đăng nhập và tần suất tương tác LMS.";
-    }
-
-    private String handleImprovementSuggestions(Map<String, String> entities, String username, String role) {
-        if (!"STUDENT".equals(role)) {
-            return "ℹ️ Chức năng gợi ý cải thiện chủ yếu dành cho sinh viên.";
-        }
-        String courseName = entities.getOrDefault("course_name", "môn học");
-        return "💡 Gợi ý cải thiện cho " + courseName + ":\n"
-                + "• Ưu tiên nộp đủ bài tập và quiz\n"
-                + "• Ôn lại phần lý thuyết nền tảng\n"
-                + "• Theo dõi điểm thành phần thường xuyên\n"
-                + "• Hỏi giảng viên/cố vấn nếu còn vướng nội dung\n"
-                + "• Đặt mục tiêu chuyên cần ổn định để tránh rủi ro";
-    }
-
-    private String handleCheckApiStatus(String username, String role) {
-        if (!"ADMIN".equals(role)) {
-            return "🔒 Chức năng này chỉ dành cho quản trị viên.";
-        }
-        
-        return "✅ Kết nối Moodle API hoạt động bình thường.\n" +
-               "🔗 Base URL: http://localhost/moodle\n" +
-               "⏰ Timestamp: " + LocalDateTime.now();
-    }
-
-    /**
-     * Format response từ MoodleRestController thành text
-     */
     private String formatResponse(ResponseEntity<?> response) {
-        if (response == null || response.getBody() == null) {
-            return "Không có dữ liệu";
-        }
-        
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
         Object body = response.getBody();
-        
-        // Nếu body là Map, format thành text dễ đọc
         if (body instanceof Map) {
-            return formatMapToText((Map<?, ?>) body);
+            return formatGenericMap((Map<?, ?>) body);
         }
-        
         return body.toString();
     }
 
-    /**
-     * Format Map thành text dễ đọc với format đẹp theo yêu cầu
-     */
-    private String formatMapToText(Map<?, ?> map) {
-        try {
-            // Nếu có key "courses" - đây là response điểm/chuyên cần
-            if (map.containsKey("courses")) {
-                return formatCoursesResponse(map);
-            }
-            
-            // Nếu có key "students" - đây là danh sách sinh viên nguy cơ
-            if (map.containsKey("students")) {
-                return formatAtRiskStudentsResponse(map);
-            }
-            
-            // Nếu có các key thống kê
-            if (map.containsKey("totalStudents") || map.containsKey("totalCourses")) {
-                return formatStatisticsResponse(map);
-            }
-            
-            // Default fallback - hiển thị bình thường
-            StringBuilder sb = new StringBuilder();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                String key = entry.getKey().toString();
-                Object value = entry.getValue();
-                sb.append(key).append(": ").append(value).append("\n");
-            }
-            return sb.toString();
-            
-        } catch (Exception e) {
-            log.error("Error formatting map: {}", e.getMessage());
-            return map.toString();
+    private String formatGenericMap(Map<?, ?> map) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            String key = entry.getKey().toString();
+            if ("students".equals(key) || "courses".equals(key) || "missingStudents".equals(key)
+                    || "atRiskStudents".equals(key) || "inactiveStudents".equals(key)) continue;
+            Object value = entry.getValue();
+            sb.append(key).append(": ").append(value).append("\n");
         }
+        return sb.toString();
     }
 
-    /**
-     * Format response courses (grades/attendance)
-     */
-    private String formatCoursesResponse(Map<?, ?> map) {
+    private String formatGradesResponse(ResponseEntity<?> response) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu điểm";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+        if (body.containsKey("error")) return "❌ " + body.get("error");
+
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> courses = (List<Map<String, Object>>) map.get("courses");
-        
-        if (courses == null || courses.isEmpty()) {
-            return "Không có dữ liệu";
-        }
-        
-        StringBuilder sb = new StringBuilder();
-        Map<String, Object> firstCourse = courses.get(0);
-        String studentId = (String) firstCourse.get("studentId");
-        String fullName = (String) firstCourse.get("fullName");
-        
-        sb.append("📊 THÔNG TIN SINH VIÊN\n\n");
-        sb.append("MSSV: ").append(studentId).append("\n");
-        sb.append("Họ tên: ").append(fullName).append("\n");
-        sb.append("Tổng số môn: ").append(courses.size()).append("\n\n");
-        
+        List<Map<String, Object>> courses = (List<Map<String, Object>>) body.get("courses");
+        if (courses == null || courses.isEmpty()) return "Không có dữ liệu điểm";
+
+        StringBuilder sb = new StringBuilder("📊 BẢNG ĐIỂM SINH VIÊN\n\n");
+        String studentId = (String) body.get("studentId");
+        sb.append("MSSV: ").append(studentId).append("\n\n");
+
         for (Map<String, Object> course : courses) {
             String courseName = (String) course.get("courseName");
             sb.append("📚 ").append(courseName).append("\n");
-            
+
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> grades = (List<Map<String, Object>>) course.get("grades");
-            
             if (grades != null && !grades.isEmpty()) {
                 for (Map<String, Object> grade : grades) {
                     String itemName = (String) grade.get("itemName");
                     Object gradeRaw = grade.get("gradeRaw");
-                    Object gradeMax = grade.get("gradeMax");
-                    Object percentage = grade.get("percentage");
-                    
                     if (gradeRaw != null) {
                         sb.append("  • ").append(itemName).append(": ")
                           .append(String.format("%.1f", gradeRaw)).append("/")
-                          .append(String.format("%.1f", gradeMax))
-                          .append(" (").append(String.format("%.1f", percentage)).append("%)\n");
+                          .append(String.format("%.1f", grade.get("gradeMax")))
+                          .append(" (").append(String.format("%.1f", grade.get("percentage"))).append("%)\n");
                     } else {
-                        sb.append("  • ").append(itemName).append(": Chưa có điểm\n");
+                        sb.append("  • ").append(itemName).append(": ⚠️ Chưa có điểm\n");
                     }
                 }
-            } else {
-                sb.append("  • Chưa có điểm\n");
             }
             sb.append("\n");
         }
-        
         return sb.toString().trim();
     }
 
-    /**
-     * Format at-risk students response
-     */
-    private String formatAtRiskStudentsResponse(Map<?, ?> map) {
+    private String formatAttendanceResponse(ResponseEntity<?> response) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu chuyên cần";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+        if (body.containsKey("error")) return "❌ " + body.get("error");
+
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> students = (List<Map<String, Object>>) map.get("students");
-        Integer count = (Integer) map.get("count");
-        String riskLevel = (String) map.get("riskLevel");
-        
+        List<Map<String, Object>> courses = (List<Map<String, Object>>) body.get("courses");
+        if (courses == null || courses.isEmpty()) return "Không có dữ liệu chuyên cần";
+
+        StringBuilder sb = new StringBuilder("📅 CHUYÊN CẦN SINH VIÊN\n\n");
+        sb.append("MSSV: ").append(body.get("studentId")).append("\n\n");
+
+        for (Map<String, Object> course : courses) {
+            sb.append("📚 ").append(course.get("courseName")).append("\n");
+            Object lastAccess = course.get("lastAccess");
+            Object days = course.get("daysSinceAccess");
+            Object status = course.get("status");
+
+            if (lastAccess != null) {
+                sb.append("  • Lần cuối truy cập: ").append(lastAccess).append("\n");
+                sb.append("  • Số ngày: ").append(days).append("\n");
+                sb.append("  • Trạng thái: ").append("inactive".equals(status) ? "🔴 Không hoạt động" : "🟢 Hoạt động").append("\n");
+            } else {
+                sb.append("  • ⚠️ Chưa từng truy cập môn này\n");
+            }
+            sb.append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private String formatStudentStatusResponse(ResponseEntity<?> response) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+        if (body.containsKey("error")) return "❌ " + body.get("error");
+
+        StringBuilder sb = new StringBuilder("📊 TÌNH TRẠNG HỌC TẬP\n\n");
+        sb.append("MSSV: ").append(body.get("studentId")).append("\n");
+        Object fullName = body.get("fullName");
+        sb.append("Họ tên: ").append(fullName != null ? fullName : "N/A").append("\n");
+        sb.append("Tổng số môn: ").append(body.get("totalCourses")).append("\n");
+        sb.append("Điểm TB: ").append(body.get("avgGrade")).append("\n");
+        sb.append("Môn không hoạt động: ").append(body.get("inactiveCourses")).append("\n\n");
+        sb.append("Mức cảnh báo: ").append(formatRiskLevel((String) body.get("riskLevel"))).append("\n");
+        return sb.toString();
+    }
+
+    private String formatRiskLevel(String level) {
+        if (level == null) return "⚪ Chưa xác định";
+        return switch (level) {
+            case "green" -> "🟢 XANH - An toàn";
+            case "yellow" -> "🟡 VÀNG - Cần theo dõi";
+            case "red" -> "🔴 ĐỎ - Nguy cơ cao";
+            default -> "⚪ " + level;
+        };
+    }
+
+    private String formatLastAccessResponse(ResponseEntity<?> response) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+        if (body.containsKey("error")) return "❌ " + body.get("error");
+        return formatAttendanceResponse(response);
+    }
+
+    /**
+     * Format danh sách SV vi phạm - CHỈ hiển thị SV thực sự vi phạm
+     * Dùng ResponseGenerator cho phần header/count/note đa dạng.
+     */
+    private String formatAtRiskStudentsResponse(ResponseEntity<?> response, boolean onlyViolations) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> students = (List<Map<String, Object>>) body.get("students");
+        Integer count = (Integer) body.get("count");
+        Integer violationsCount = (Integer) body.get("violationsCount");
+        String level = (String) body.get("riskLevel");
+
         StringBuilder sb = new StringBuilder();
-        sb.append("⚠️ DANH SÁCH SINH VIÊN CẢNH BÁO\n\n");
-        
-        String icon = "🟢";
-        if ("yellow".equals(riskLevel)) icon = "🟡";
-        if ("red".equals(riskLevel)) icon = "🔴";
-        
-        sb.append("Mức: ").append(icon).append(" ").append(riskLevel != null ? riskLevel.toUpperCase() : "ALL").append("\n");
-        sb.append("Số lượng: ").append(count != null ? count : students.size()).append(" sinh viên\n\n");
-        
+        sb.append(responseGenerator.atRiskHeader(level)).append("\n\n");
+
+        if (count == null) count = students != null ? students.size() : 0;
+        Integer total = body.get("totalAnalyzed") != null ? ((Number) body.get("totalAnalyzed")).intValue() : null;
+        sb.append(responseGenerator.atRiskCount(count, total)).append("\n\n");
+
         if (students != null && !students.isEmpty()) {
             for (Map<String, Object> student : students) {
-                String sid = (String) student.get("studentId");
-                String name = (String) student.get("fullName");
-                Object avgGrade = student.get("avgGrade");
-                Object inactiveCourses = student.get("inactiveCourses");
-                
-                sb.append("• ").append(sid).append(" - ").append(name).append("\n");
-                sb.append("  Điểm TB: ").append(String.format("%.1f", avgGrade)).append("%, ");
-                sb.append("Môn không hoạt động: ").append(inactiveCourses).append("\n\n");
+                String icon = "🟢";
+                String level2 = (String) student.get("riskLevel");
+                if ("yellow".equals(level2)) icon = "🟡";
+                if ("red".equals(level2)) icon = "🔴";
+                double avg = student.get("avgGrade") != null ? ((Number) student.get("avgGrade")).doubleValue() : 0;
+                int inactive = student.get("inactiveCourses") != null ? ((Number) student.get("inactiveCourses")).intValue() : 0;
+                Object days = student.get("maxDaysSinceAccess");
+                sb.append(responseGenerator.atRiskRow(icon,
+                        String.valueOf(student.get("studentId")),
+                        String.valueOf(student.get("fullName")),
+                        avg, inactive, days));
             }
         } else {
-            sb.append("Không có sinh viên nào.\n");
+            sb.append(responseGenerator.atRiskEmpty());
         }
-        
+
+        if (onlyViolations) {
+            sb.append(responseGenerator.atRiskNote());
+        }
         return sb.toString();
     }
 
-    /**
-     * Format statistics response
-     */
-    private String formatStatisticsResponse(Map<?, ?> map) {
+    private String formatMissingSubmissionsResponse(ResponseEntity<?> response, String courseName, String activityType) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> students = (List<Map<String, Object>>) body.get("missingStudents");
+        Integer count = (Integer) body.get("count");
+
         StringBuilder sb = new StringBuilder();
-        sb.append("📈 THỐNG KÊ TỔNG QUAN\n\n");
-        
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            String key = entry.getKey().toString();
-            Object value = entry.getValue();
-            
-            String label = key;
-            if ("totalCourses".equals(key)) label = "📚 Tổng số khóa học";
-            if ("totalStudents".equals(key)) label = "👥 Tổng số sinh viên";
-            if ("avgStudentsPerCourse".equals(key)) label = "📊 TB sinh viên/khóa";
-            
-            sb.append(label).append(": ").append(value).append("\n");
+        sb.append("📋 SINH VIÊN CHƯA NỘP ").append(activityType.toUpperCase()).append("\n\n");
+        sb.append("Môn: ").append(body.get("courseName")).append("\n");
+        sb.append("Loại: ").append(activityType).append("\n");
+        sb.append("Số SV chưa nộp: ").append(count != null ? count : 0).append("\n\n");
+
+        if (students != null && !students.isEmpty()) {
+            for (Map<String, Object> s : students) {
+                sb.append("⚠️ ").append(s.get("studentId")).append(" - ").append(s.get("fullName")).append("\n");
+                sb.append("    Đã nộp: ").append(s.get("submitted")).append("/").append(s.get("total"));
+                sb.append(" (thiếu ").append(s.get("missing")).append(")\n\n");
+            }
+        } else {
+            sb.append("✅ Tất cả sinh viên đã nộp đầy đủ.\n");
         }
-        
         return sb.toString();
     }
 
-    /**
-     * Lưu chat history vào database
-     */
+    private String formatCourseRiskResponse(ResponseEntity<?> response) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> students = (List<Map<String, Object>>) body.get("atRiskStudents");
+        Integer count = (Integer) body.get("count");
+        Integer total = (Integer) body.get("totalStudents");
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("⚠️ SINH VIÊN CÓ RỦI RO - ").append(body.get("courseName")).append("\n\n");
+        sb.append("Tổng SV: ").append(total).append(" | Có rủi ro: ").append(count).append("\n\n");
+
+        if (students != null && !students.isEmpty()) {
+            for (Map<String, Object> s : students) {
+                String icon = "🟢";
+                String level = (String) s.get("riskLevel");
+                if ("yellow".equals(level)) icon = "🟡";
+                if ("red".equals(level)) icon = "🔴";
+                sb.append(icon).append(" ").append(s.get("studentId")).append(" - ").append(s.get("fullName")).append("\n");
+                sb.append("    Điểm TB: ").append(s.get("avgGrade"));
+                if (Boolean.TRUE.equals(s.get("hasGrades"))) {
+                    sb.append(" (đã có điểm)");
+                } else {
+                    sb.append(" (chưa có điểm)");
+                }
+                sb.append(" | Không online: ").append(s.get("daysSinceAccess")).append(" ngày\n\n");
+            }
+        } else {
+            sb.append("✅ Không có sinh viên vi phạm trong môn này.\n");
+        }
+        return sb.toString();
+    }
+
+    private String formatClassRiskResponse(ResponseEntity<?> response) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> summary = (Map<String, Object>) body.get("summary");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> students = (List<Map<String, Object>>) body.get("atRiskStudents");
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("📊 TÌNH HÌNH HỌC VỤ LỚP ").append(body.get("classCode")).append("\n\n");
+        if (summary != null) {
+            sb.append("🔴 Mức đỏ: ").append(summary.get("red")).append("\n");
+            sb.append("🟡 Mức vàng: ").append(summary.get("yellow")).append("\n");
+            sb.append("🟢 Mức xanh: ").append(summary.get("green")).append("\n");
+            sb.append("📚 Tổng: ").append(summary.get("total")).append("\n\n");
+        }
+
+        if (students != null && !students.isEmpty()) {
+            sb.append("⚠️ Danh sách sinh viên có rủi ro (chỉ SV vi phạm):\n\n");
+            for (Map<String, Object> s : students) {
+                String icon = "🟡";
+                String level = (String) s.get("riskLevel");
+                if ("red".equals(level)) icon = "🔴";
+                sb.append(icon).append(" ").append(s.get("studentId")).append(" - ").append(s.get("fullName")).append("\n");
+                sb.append("    Điểm TB: ").append(s.get("avgGrade"));
+                sb.append(" | Môn không hoạt động: ").append(s.get("inactiveCourses"));
+                sb.append(" | Không online: ").append(s.get("maxDaysSinceAccess")).append(" ngày\n\n");
+            }
+        } else {
+            sb.append("✅ Lớp không có sinh viên vi phạm.\n");
+        }
+        return sb.toString();
+    }
+
+    private String formatInactiveStudentsResponse(ResponseEntity<?> response) {
+        if (response == null || response.getBody() == null) return "Không có dữ liệu";
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> students = (List<Map<String, Object>>) body.get("inactiveStudents");
+        Integer count = (Integer) body.get("count");
+        Integer threshold = (Integer) body.get("inactiveDaysThreshold");
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("📭 SINH VIÊN NGỪNG TƯƠNG TÁC (>").append(threshold).append(" ngày)\n\n");
+        sb.append("Số sinh viên vi phạm: ").append(count).append("\n\n");
+
+        if (students != null && !students.isEmpty()) {
+            for (Map<String, Object> s : students) {
+                long days = ((Number) s.get("daysSinceAccess")).longValue();
+                sb.append("⚠️ ").append(s.get("studentId")).append(" - ").append(s.get("fullName")).append("\n");
+                sb.append("    Không online: ").append(days).append(" ngày");
+                sb.append(" | Lần cuối: ").append(s.get("lastAccessDate")).append("\n\n");
+            }
+        } else {
+            sb.append("✅ Không có sinh viên nào ngừng tương tác quá ").append(threshold).append(" ngày.\n");
+        }
+        return sb.toString();
+    }
+
+    // ============================================================
+    // HISTORY
+    // ============================================================
+
     private void saveChatHistory(String username, String userMessage, String botResponse, String intent) {
         try {
-            // Save user message
             ChatHistory userHistory = new ChatHistory();
-            userHistory.setSessionId(username);  // Dùng username làm session ID
-            userHistory.setLecturerId(1L);  // TODO: Get actual user ID
+            userHistory.setSessionId(username);
+            userHistory.setLecturerId(1L);
             userHistory.setRole(ChatRole.USER);
             userHistory.setContent(userMessage);
             userHistory.setIntent(intent);
             userHistory.setCreatedAt(LocalDateTime.now());
             chatHistoryRepository.save(userHistory);
-            
-            // Save bot response
+
             ChatHistory botHistory = new ChatHistory();
             botHistory.setSessionId(username);
             botHistory.setLecturerId(1L);
-            botHistory.setRole(ChatRole.BOT);  // Dùng BOT thay vì ASSISTANT
+            botHistory.setRole(ChatRole.BOT);
             botHistory.setContent(botResponse);
             botHistory.setIntent(intent);
             botHistory.setCreatedAt(LocalDateTime.now());
             chatHistoryRepository.save(botHistory);
-            
-            log.debug("Saved chat history for user: {}", username);
         } catch (Exception e) {
             log.error("Error saving chat history: {}", e.getMessage(), e);
         }
     }
 
-    /**
-     * Tạo ChatResponseDTO
-     */
     private ChatResponseDTO createResponse(String text, String intent, double confidence, Map<String, String> entities) {
         ChatResponseDTO response = new ChatResponseDTO();
-        response.setReply(text);  // Dùng setReply thay vì setMessage
+        response.setReply(text);
         response.setIntent(intent);
         response.setTimestamp(LocalDateTime.now());
-        
         return response;
     }
 }

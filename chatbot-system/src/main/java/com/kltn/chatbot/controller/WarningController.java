@@ -63,8 +63,25 @@ public class WarningController {
     public ResponseEntity<ApiResponse<Warning>> acknowledgeWarning(
             @PathVariable Long id,
             @RequestParam Long lecturerId) {
-        
+
         Warning warning = warningAnalysisService.acknowledgeWarning(id, lecturerId);
         return ResponseEntity.ok(ApiResponse.success("Warning acknowledged successfully", warning));
+    }
+
+    /**
+     * Test endpoint: Force trigger a RED risk event for testing the notification pipeline.
+     * Body: { "studentId": <long>, "courseId": <long> } - local entity IDs.
+     */
+    @PostMapping("/test-red")
+    @Operation(summary = "Test RED event", description = "Force calculate a RED risk to trigger notification event")
+    public ResponseEntity<ApiResponse<Warning>> testRedEvent(@RequestBody Map<String, Long> body) {
+        Long studentId = body.get("studentId");
+        Long courseId = body.get("courseId");
+        if (studentId == null || courseId == null) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("studentId and courseId are required"));
+        }
+        Warning warning = warningAnalysisService.testTriggerRedEvent(studentId, courseId);
+        return ResponseEntity.ok(ApiResponse.success("RED event triggered - check Moodle messages", warning));
     }
 }
