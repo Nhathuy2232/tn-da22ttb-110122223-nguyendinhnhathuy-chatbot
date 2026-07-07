@@ -303,6 +303,14 @@ public class ResponseGenerator {
         return "⏰ TÌNH TRẠNG HỌC TẬP CỦA " + fullName.toUpperCase() + " (MSSV " + studentId + ")";
     }
 
+    public String gradesOnlyHeader(String fullName, String studentId) {
+        return "📊 ĐIỂM SỐ CỦA " + fullName.toUpperCase() + " (MSSV " + studentId + ")";
+    }
+
+    public String attendanceOnlyHeader(String fullName, String studentId) {
+        return "📅 CHUYÊN CẦN RIÊNG CỦA " + fullName.toUpperCase() + " (MSSV " + studentId + ")";
+    }
+
     public String attendanceLastAccess(long daysAccess) {
         if (daysAccess >= 999) {
             return pick(new String[]{

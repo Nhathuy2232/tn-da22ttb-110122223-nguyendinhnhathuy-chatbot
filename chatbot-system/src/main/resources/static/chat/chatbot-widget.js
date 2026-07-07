@@ -10,7 +10,7 @@
 
     // Configuration
     const config = window.chatbotConfig || {
-        apiUrl: 'http://localhost:8081/api',
+        apiUrl: `${window.location.protocol}//${window.location.hostname}:8081/api`,
         position: 'bottom-right',
         primaryColor: '#2196F3'
     };
@@ -60,8 +60,8 @@
         if (!toggleBtn) return;
 
         toggleBtn.addEventListener('click', () => {
-            // Open the chat page when clicking the icon.
-            window.open('/chatbot-system/src/main/resources/static/chat/chat.html', '_blank');
+            const chatUrl = `${window.location.protocol}//${window.location.hostname}:8081/api/chat/chat.html`;
+            window.open(chatUrl, '_blank');
         });
 
         toggleBtn.addEventListener('mouseenter', () => {

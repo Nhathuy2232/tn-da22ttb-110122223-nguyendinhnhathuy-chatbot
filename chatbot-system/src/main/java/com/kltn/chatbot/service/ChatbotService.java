@@ -57,39 +57,40 @@ public class ChatbotService {
         log.info("Username: {} | Role: {} | Message: {}", username, role, request.getMessage());
 
         try {
-            // Bước 1: Phân tích intent (ưu tiên LocalIntentMatcher có entity)
             Map<String, Object> analysis = LocalIntentMatcher.matchForRole(request.getMessage(), role, username)
-                    .orElseGet(() -> openaiService.analyzeMessage(
-                            request.getMessage(), role, username));
+                    .orElseGet(() -> openaiService.analyzeMessage(request.getMessage(), role, username));
+            if (analysis == null) {
+                analysis = new HashMap<>();
+                analysis.put("intent", "UNKNOWN");
+                analysis.put("confidence", 0.0);
+                analysis.put("entities", new HashMap<String, String>());
+            }
 
-            String intent = (String) analysis.get("intent");
-            double confidence = ((Number) analysis.get("confidence")).doubleValue();
+            String intent = String.valueOf(analysis.getOrDefault("intent", "UNKNOWN"));
+            double confidence = analysis.get("confidence") instanceof Number n ? n.doubleValue() : 0.0;
             @SuppressWarnings("unchecked")
-            Map<String, String> entities = (Map<String, String>) analysis.get("entities");
+            Map<String, String> entities = analysis.get("entities") instanceof Map<?, ?> m
+                    ? (Map<String, String>) m
+                    : new HashMap<>();
 
             log.info("Intent: {} | Confidence: {} | Entities: {}", intent, confidence, entities);
 
+            String responseText;
             if ("ERROR".equals(intent)) {
-                String errorResponse = "Xin lỗi, hệ thống AI tạm thời không khả dụng. Vui lòng thử lại sau.";
-                saveChatHistory(username, request.getMessage(), errorResponse, intent);
-                return createResponse(errorResponse, intent, confidence, entities);
-            }
-
-            if (confidence < 0.5 && !CHITCHAT_INTENTS.contains(intent)) {
-                String fallback = "Xin lỗi, tôi chưa hiểu rõ yêu cầu của bạn. Bạn có thể hỏi về:\n"
-                        + "• Điểm số, chuyên cần\n"
+                responseText = "Xin lỗi, hệ thống AI tạm thời không khả dụng. Vui lòng thử lại sau.";
+            } else if (confidence < 0.5 && !CHITCHAT_INTENTS.contains(intent)) {
+                responseText = "Xin lỗi, tôi chưa hiểu rõ yêu cầu của bạn. Bạn có thể hỏi về:\n"
+                        + "• Điểm số riêng\n"
+                        + "• Chuyên cần riêng\n"
                         + "• Sinh viên nguy cơ thôi học\n"
                         + "• Cấu hình hệ thống (admin)\n"
                         + "• Lớp chủ nhiệm (cố vấn)";
-                saveChatHistory(username, request.getMessage(), fallback, "UNKNOWN");
-                return createResponse(fallback, "UNKNOWN", confidence, entities);
-            }
-
-            // Bước 2: Xử lý theo intent
-            String responseText = processIntent(intent, entities, username, role);
-
-            if (responseText == null || responseText.isBlank()) {
-                responseText = responseGenerator.dataMissing();
+                intent = "UNKNOWN";
+            } else {
+                responseText = processIntent(intent, entities, username, role);
+                if (responseText == null || responseText.isBlank()) {
+                    responseText = responseGenerator.dataMissing();
+                }
             }
 
             saveChatHistory(username, request.getMessage(), responseText, intent);
@@ -155,6 +156,9 @@ public class ChatbotService {
                 case "QUERY_CLASS_SUMMARY" -> handleClassSummary(entities, role);
                 case "QUERY_RISK_STATUS" -> handleRiskStatus(entities, username, role);
                 case "ACTION_SEND_WARNING_NOTIFICATION" -> handleSendNotification(entities, role);
+
+                case "QUERY_GRADE_ONLY" -> handleGradeOnly(entities, username, role);
+                case "QUERY_ATTENDANCE_ONLY" -> handleAttendanceOnly(entities, username, role);
 
                 case "PERMISSION_DENIED" -> responseGenerator.permissionDenied(role, intent);
 
@@ -250,7 +254,6 @@ public class ChatbotService {
             return responseGenerator.gradesNoCourses(studentId, fullName);
         }
 
-        // Lọc môn khớp nếu có yêu cầu
         List<Map<String, Object>> filteredCourses = new ArrayList<>();
         if (courseName != null && !courseName.isBlank()) {
             for (Map<String, Object> c : courses) {
@@ -274,7 +277,6 @@ public class ChatbotService {
             String cname = (String) c.get("fullname");
             sb.append("📘 ").append(cname).append("\n");
 
-            // Lấy danh sách từng bài tập
             List<Map<String, Object>> assigns = directQuery.findAssignmentGrades(courseId, userId);
             if (assigns.isEmpty()) {
                 sb.append(responseGenerator.gradesEmptyCourse(cname)).append("\n\n");
@@ -313,13 +315,43 @@ public class ChatbotService {
         return sb.toString();
     }
 
+    private String handleGradeOnly(Map<String, String> entities, String username, String role) {
+        return handleStudentGrades(entities, username, role);
+    }
+
+    private String handleAttendanceOnly(Map<String, String> entities, String username, String role) {
+        String studentId = entities.getOrDefault("mssv", username);
+
+        if ("STUDENT".equals(role)) {
+            if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
+                return responseGenerator.permissionDenied(role, "QUERY_ATTENDANCE_ONLY");
+            }
+            studentId = username;
+        }
+
+        Optional<Map<String, Object>> userOpt = directQuery.findUserByUsername(studentId);
+        if (userOpt.isEmpty()) {
+            return responseGenerator.gradesNotFound(studentId);
+        }
+        Map<String, Object> user = userOpt.get();
+        long userId = ((Number) user.get("id")).longValue();
+        String fullName = (String) user.get("fullname");
+        long daysAccess = directQuery.getDaysSinceAccess(userId);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(responseGenerator.attendanceHeader(fullName, studentId)).append("\n\n");
+        sb.append(responseGenerator.attendanceLastAccess(daysAccess)).append("\n");
+        sb.append(responseGenerator.attendanceWarning(daysAccess)).append("\n");
+        return sb.toString();
+    }
+
     private String handleStudentAttendance(Map<String, String> entities, String username, String role) {
         String studentId = entities.getOrDefault("mssv", username);
         String courseName = entities.get("course_name");
 
         if ("STUDENT".equals(role)) {
             if (entities.containsKey("mssv") && !entities.get("mssv").equals(username)) {
-                return responseGenerator.permissionDenied(role, "CHECK_OWN_RISK_STATUS");
+                return responseGenerator.permissionDenied(role, "QUERY_STUDENT_ATTENDANCE");
             }
             studentId = username;
         }
@@ -338,19 +370,39 @@ public class ChatbotService {
         sb.append(responseGenerator.attendanceLastAccess(daysAccess)).append("\n");
         sb.append(responseGenerator.attendanceWarning(daysAccess)).append("\n\n");
 
-        // Thêm điểm
-        sb.append(responseGenerator.gradesListHeader()).append("\n");
         List<Map<String, Object>> courses = directQuery.findEnrolledCourses(userId);
+        if (courses.isEmpty()) {
+            sb.append("Không có môn học nào để kiểm tra chuyên cần.");
+            return sb.toString();
+        }
+
+        sb.append("📋 BẢNG CHUYÊN CẦN\n\n");
+        sb.append(String.format("%-35s %-18s %-10s\n", "Môn học", "Lần online cuối", "Trạng thái"));
+        sb.append("────────────────────────────────────────────────────────────\n");
+
+        boolean hasRow = false;
         for (Map<String, Object> c : courses) {
-            long courseId = ((Number) c.get("id")).longValue();
             String cname = (String) c.get("fullname");
-            if (courseName != null && !courseName.isBlank() && !cname.toLowerCase().contains(courseName.toLowerCase())) {
+            if (courseName != null && !courseName.isBlank() && (cname == null || !cname.toLowerCase().contains(courseName.toLowerCase()))) {
                 continue;
             }
+
+            long courseId = ((Number) c.get("id")).longValue();
             Map<String, Object> grade = directQuery.getCourseAverageGrade(courseId, userId);
-            double avg = ((Number) grade.get("avgGrade")).doubleValue();
             boolean has = (Boolean) grade.get("hasGrades");
-            sb.append(responseGenerator.courseLine(cname, avg, has)).append("\n");
+            long daysSinceAccess = daysAccess;
+            String status = daysSinceAccess > 14 ? "🔴 Không hoạt động" : daysSinceAccess > 7 ? "🟡 Cần theo dõi" : "🟢 Hoạt động";
+            String lastAccessText = daysSinceAccess >= 999 ? "Chưa có" : daysSinceAccess + " ngày";
+
+            sb.append(String.format("%-35s %-18s %-10s\n",
+                    truncateText(cname, 34),
+                    lastAccessText,
+                    status));
+            hasRow = true;
+        }
+
+        if (!hasRow) {
+            sb.append("Không có môn nào khớp để hiển thị chuyên cần.");
         }
         return sb.toString();
     }
@@ -1119,5 +1171,25 @@ public class ChatbotService {
         response.setIntent(intent);
         response.setTimestamp(LocalDateTime.now());
         return response;
+    }
+
+    private String truncateText(String text, int maxLength) {
+        if (text == null) return "-";
+        if (text.length() <= maxLength) return text;
+        return text.substring(0, Math.max(0, maxLength - 3)) + "...";
+    }
+
+    /**
+     * Get chat history for a user
+     * @param username Username to retrieve history for
+     * @return List of chat history records
+     */
+    public List<ChatHistory> getChatHistory(String username) {
+        try {
+            return chatHistoryRepository.findBySessionIdOrderByCreatedAtAsc(username);
+        } catch (Exception e) {
+            log.error("Error retrieving chat history for user {}: {}", username, e.getMessage(), e);
+            return new ArrayList<>();
+        }
     }
 }

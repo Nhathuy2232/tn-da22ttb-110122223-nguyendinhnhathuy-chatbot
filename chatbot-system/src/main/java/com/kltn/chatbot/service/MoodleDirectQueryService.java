@@ -272,4 +272,28 @@ public class MoodleDirectQueryService {
             return List.of();
         }
     }
+    
+    /**
+     * Lấy tất cả sinh viên ĐANG HOẠT ĐỘNG (có enrolment còn hiệu lực).
+     * Dùng cho automatic risk monitoring.
+     */
+    public List<Map<String, Object>> findAllActiveStudents() {
+        String sql = "SELECT DISTINCT u.id, u.username, u.firstname, u.lastname, " +
+                "       CONCAT(u.firstname,' ',u.lastname) AS fullname, " +
+                "       u.email, u.lastaccess " +
+                "FROM mdl_user u " +
+                "JOIN mdl_user_enrolments ue ON ue.userid = u.id " +
+                "JOIN mdl_enrol e ON e.id = ue.enrolid " +
+                "WHERE u.username REGEXP '^1101[0-9]{5}$' " +
+                "  AND u.deleted = 0 " +
+                "  AND u.suspended = 0 " +
+                "  AND ue.status = 0 " +
+                "ORDER BY u.username";
+        try {
+            return jdbc.queryForList(sql);
+        } catch (Exception e) {
+            log.error("findAllActiveStudents failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
 }

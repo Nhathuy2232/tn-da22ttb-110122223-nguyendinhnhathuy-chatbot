@@ -34,13 +34,13 @@ public class Warning {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.EAGER)
-    @JoinColumn(name = "student_id", nullable = false)
-    private Student student;
+    /** Moodle user ID (mdl_user.id), not local students.id */
+    @Column(name = "student_id", nullable = false)
+    private Long studentId;
 
-    @ManyToOne(fetch = FetchType.EAGER)
-    @JoinColumn(name = "course_id")
-    private Course course;
+    /** Moodle course ID (mdl_course.id), not local courses.id */
+    @Column(name = "course_id")
+    private Long courseId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "risk_level", nullable = false, length = 20)

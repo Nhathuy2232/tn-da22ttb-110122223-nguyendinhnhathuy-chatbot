@@ -89,8 +89,8 @@ public class WarningAnalysisService {
 
         // Create or update warning
         Warning warning = Warning.builder()
-                .student(student)
-                .course(course)
+                .studentId(student.getMoodleUserId())
+                .courseId(course.getMoodleCourseId())
                 .riskLevel(riskLevel)
                 .severity(riskLevel)
                 .warningType(detectWarningType(gradeAverage, attendanceRate, completionRate, lastAccessDays))
@@ -272,8 +272,8 @@ public class WarningAnalysisService {
         // Build entity in-memory (skip DB save vì schema cũ có các field NOT NULL mà entity không map)
         Warning warning = Warning.builder()
                 .id(System.currentTimeMillis()) // fake id for event
-                .student(student)
-                .course(course)
+                .studentId(student.getMoodleUserId())
+                .courseId(course.getMoodleCourseId())
                 .riskLevel(RiskLevel.RED)
                 .severity(RiskLevel.RED)
                 .warningType(WarningType.GENERAL)

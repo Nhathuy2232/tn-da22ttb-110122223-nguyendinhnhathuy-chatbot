@@ -1,5 +1,7 @@
 // Configuration
-const API_BASE = 'http://localhost:8081/api';
+const API_BASE = (window.chatbotConfig && window.chatbotConfig.apiUrl)
+    ? window.chatbotConfig.apiUrl
+    : `${window.location.protocol}//${window.location.hostname}:8081/api`;
 let sessionId = 'session-' + Date.now();
 let lecturerId = 1; // TODO: Get from authentication
 

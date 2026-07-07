@@ -33,7 +33,6 @@ public class ChatController {
     @Operation(summary = "Send chat message", description = "Process user message with Gemini API and Moodle data")
     public ResponseEntity<ApiResponse<ChatResponseDTO>> sendMessage(
             @Valid @RequestBody ChatRequestDTO request) {
-        
         ChatResponseDTO response = chatbotService.handleUserMessage(request);
         return ResponseEntity.ok(ApiResponse.success("Message processed successfully", response));
     }
@@ -42,8 +41,7 @@ public class ChatController {
     @Operation(summary = "Get chat history", description = "Retrieve chat history for a user")
     public ResponseEntity<ApiResponse<List<ChatHistory>>> getChatHistory(
             @PathVariable String username) {
-        
-        // TODO: Implement getChatHistory in ChatbotService if needed
-        return ResponseEntity.ok(ApiResponse.success("Chat history", null));
+        List<ChatHistory> history = chatbotService.getChatHistory(username);
+        return ResponseEntity.ok(ApiResponse.success("Chat history", history));
     }
 }

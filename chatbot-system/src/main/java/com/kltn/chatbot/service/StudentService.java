@@ -49,7 +49,7 @@ public class StudentService {
         Student student = getStudentById(studentId);
         
         // Get latest warning
-        List<Warning> warnings = warningRepository.findByStudentAndCourse(studentId, null);
+        List<Warning> warnings = warningRepository.findByStudentAndCourse(student.getMoodleUserId(), null);
         
         if (warnings.isEmpty()) {
             return StudentRiskDTO.builder()
@@ -70,8 +70,8 @@ public class StudentService {
                 .studentName(student.getFullName())
                 .studentCode(student.getStudentCode())
                 .email(student.getEmail())
-                .courseId(latestWarning.getCourse().getId())
-                .courseName(latestWarning.getCourse().getCourseName())
+                .courseId(latestWarning.getCourseId())
+                .courseName("Course " + latestWarning.getCourseId()) // Temporary
                 .riskLevel(latestWarning.getRiskLevel())
                 .riskLevelDisplay(latestWarning.getRiskLevel().getDisplayName())
                 .gradeAverage(latestWarning.getGradeAverage())

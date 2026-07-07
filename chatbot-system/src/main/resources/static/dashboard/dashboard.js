@@ -6,7 +6,7 @@
  */
 
 // ==================== CONFIGURATION ====================
-const API_BASE = 'http://localhost:8081/api';
+const API_BASE = 'http://localhost:8082/api';
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 let riskChart = null;
 let trendChart = null;

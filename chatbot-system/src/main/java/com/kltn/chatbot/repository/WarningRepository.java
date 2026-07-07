@@ -32,7 +32,7 @@ public interface WarningRepository extends JpaRepository<Warning, Long> {
     /**
      * Tìm cảnh báo của sinh viên trong khóa học
      */
-    @Query("SELECT w FROM Warning w WHERE w.student.id = :studentId AND w.course.id = :courseId ORDER BY w.detectedAt DESC")
+    @Query("SELECT w FROM Warning w WHERE w.studentId = :studentId AND w.courseId = :courseId ORDER BY w.detectedAt DESC")
     List<Warning> findByStudentAndCourse(@Param("studentId") Long studentId, 
                                           @Param("courseId") Long courseId);
 
@@ -57,7 +57,17 @@ public interface WarningRepository extends JpaRepository<Warning, Long> {
     /**
      * Tìm cảnh báo của khóa học theo risk level
      */
-    @Query("SELECT w FROM Warning w WHERE w.course.id = :courseId AND w.riskLevel = :riskLevel ORDER BY w.detectedAt DESC")
+    @Query("SELECT w FROM Warning w WHERE w.courseId = :courseId AND w.riskLevel = :riskLevel ORDER BY w.detectedAt DESC")
     List<Warning> findByCourseAndRiskLevel(@Param("courseId") Long courseId, 
                                             @Param("riskLevel") RiskLevel riskLevel);
+    
+    /**
+     * Tìm cảnh báo gần đây của sinh viên trong khóa học (để tránh spam notification)
+     */
+    @Query("SELECT w FROM Warning w WHERE w.studentId = :studentId AND w.courseId = :courseId AND w.detectedAt >= :fromDate ORDER BY w.detectedAt DESC")
+    List<Warning> findByStudentIdAndCourseIdAndDetectedAtAfter(
+        @Param("studentId") Long studentId,
+        @Param("courseId") Long courseId,
+        @Param("fromDate") LocalDateTime fromDate
+    );
 }

@@ -31,13 +31,11 @@ public class RiskDetectedEvent extends ApplicationEvent {
     public RiskDetectedEvent(Object source, Warning warning) {
         super(source);
         this.warningId = warning.getId();
-        this.studentId = warning.getStudent() != null ? warning.getStudent().getMoodleUserId() : null;
-        this.studentName = warning.getStudent() != null
-                ? warning.getStudent().getFullName()
-                : "Sinh viên";
-        this.username = warning.getStudent() != null ? warning.getStudent().getStudentCode() : null;
-        this.courseId = warning.getCourse() != null ? warning.getCourse().getMoodleCourseId() : null;
-        this.courseName = warning.getCourse() != null ? warning.getCourse().getCourseName() : "Môn học";
+        this.studentId = warning.getStudentId();
+        this.studentName = "User " + warning.getStudentId(); // Temporary - cần query từ DB nếu cần tên thật
+        this.username = String.valueOf(warning.getStudentId());
+        this.courseId = warning.getCourseId();
+        this.courseName = "Course " + warning.getCourseId(); // Temporary - cần query từ DB nếu cần tên thật
         this.riskLevel = warning.getRiskLevel();
         this.gradeAverage = warning.getGradeAverage();
         this.attendanceRate = warning.getAttendanceRate();

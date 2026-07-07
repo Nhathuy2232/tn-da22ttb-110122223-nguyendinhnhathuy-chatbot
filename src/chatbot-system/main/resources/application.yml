@@ -11,9 +11,7 @@ spring:
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5
-      connection-timeout: 60000
-      validation-timeout: 5000
-      initialization-fail-timeout: -1
+      connection-timeout: 30000
   
   # JPA Configuration
   jpa:
@@ -26,11 +24,18 @@ spring:
         format_sql: true
         use_sql_comments: true
     open-in-view: false
+  
+  # Security (DISABLED for development)
+  # security:
+  #   user:
+  #     name: admin
+  #     password: admin123
 
 # OpenAI API Configuration
+# Đặt giá trị thực qua biến môi trường để tránh lộ bí mật trong repo.
 openai:
   api:
-    key: ${OPENAI_API_KEY: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}
+    key: ${OPENAI_API_KEY:}
     url: https://api.openai.com/v1/chat/completions
     model: ${OPENAI_MODEL:gpt-4o-mini}
     timeout: 30000
@@ -47,7 +52,7 @@ moodle:
 
 # JWT Configuration
 jwt:
-  secret: chatbot-kltn-2026-secret-key-nguyen-dinh-nhat-huy-110122223-da22ttb
+  secret: ${JWT_SECRET:chatbot-kltn-2026-secret-key-nguyen-dinh-nhat-huy-110122223-da22ttb}
   expiration: 86400000  # 24 hours in milliseconds
   issuer: chatbot-kltn-system
 
@@ -83,7 +88,7 @@ management:
 
 # Server Configuration
 server:
-  port: 8082
+  port: ${SERVER_PORT:8082}
   servlet:
     context-path: /
   error:
