@@ -19,7 +19,7 @@
 - **Repo ID:** `1265369999`  
 - **Sinh viên thực hiện:** Nguyễn Đình Nhật Huy 
 - **MSSV:** `110122223`  
-- **Loại dự án:** Ứng dụng chatbot trên nền tảng web  
+- **Tên đề tài:** Xây dựng hệ thống chatbot hỗ trợ giảng viên theo dõi tiến độ học tập và cảnh báo sinh viên có nguy cơ thôi học  
 
 ---
 
