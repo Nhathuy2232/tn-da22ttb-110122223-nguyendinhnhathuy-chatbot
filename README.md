@@ -126,17 +126,125 @@ Nếu có test theo Gherkin/BDD thì thêm hướng dẫn chạy tương ứng t
 
 ---
 
-## 📁 Cấu trúc dự án (mẫu)
+## 📁 Cấu trúc dự án
 
 ```text
 .
-├── src/                # Mã nguồn chính
-├── public/             # Tài nguyên public / điểm vào ứng dụng
-├── views/              # Giao diện/template
-├── features/           # Kịch bản Gherkin (nếu có)
-├── tests/              # Unit/Integration tests
-├── composer.json       # PHP dependencies
-└── README.md
+tn-da22ttb-110122223-nguyendinhnhathuy-chatbot/
+├── .github/
+├── .grunt/
+├── .phpstorm.meta.php/
+├── .upgradenotes/
+├── .vscode/
+├── README.md
+├── doc/
+│   ├── 110122223_Bao_cao_KLTN.docx
+│   ├── 110122223_Bao_cao_KLTN.pdf
+│   ├── BIACHINH_.docx
+│   ├── Poster_110122223.pdf
+│   └── Slide.pptx
+└── src_/
+    ├── admin/
+    ├── analytics/
+    ├── auth/
+    ├── availability/
+    ├── backup/
+    ├── badges/
+    ├── blocks/
+    ├── blog/
+    ├── cache/
+    ├── calendar/
+    ├── chatbot-system/
+    ├── cohort/
+    ├── comment/
+    ├── communication/
+    ├── competency/
+    ├── completion/
+    ├── contentbank/
+    ├── course/
+    ├── customfield/
+    ├── dataformat/
+    ├── enrol/
+    ├── error/
+    ├── favourites/
+    ├── files/
+    ├── filter/
+    ├── grade/
+    ├── group/
+    ├── h5p/
+    ├── install/
+    ├── iplookup/
+    ├── lang/
+    ├── lib/
+    ├── local/
+    ├── login/
+    ├── media/
+    ├── message/
+    ├── mnet/
+    ├── mod/
+    ├── moodlenet/
+    ├── my/
+    ├── notes/
+    ├── payment/
+    ├── pix/
+    ├── plagiarism/
+    ├── portfolio/
+    ├── privacy/
+    ├── question/
+    ├── rating/
+    ├── report/
+    ├── reportbuilder/
+    ├── repository/
+    ├── rss/
+    ├── scripts/
+    ├── search/
+    ├── src/
+    ├── tag/
+    ├── theme/
+    ├── user/
+    ├── userpix/
+    ├── webservice/
+    ├── .eslintrc
+    ├── .gherkin-lintrc
+    ├── .gitattributes
+    ├── .gitignore
+    ├── .jshintignore
+    ├── .jshintrc
+    ├── .nvmrc
+    ├── .shifter.json
+    ├── .stylelintrc
+    ├── .user.ini
+    ├── CONTRIBUTING.md
+    ├── COPYING.txt
+    ├── Gruntfile.js
+    ├── INSTALL.txt
+    ├── SIMPLE_FIX.txt
+    ├── TRADEMARK.txt
+    ├── behat.yml.dist
+    ├── check_roles.php
+    ├── composer.json
+    ├── composer.lock
+    ├── config-dist.php
+    ├── draftfile.php
+    ├── file.php
+    ├── help.php
+    ├── help_ajax.php
+    ├── index.php
+    ├── install.php
+    ├── npm-shrinkwrap.json
+    ├── package.json
+    ├── phpcs.xml.dist
+    ├── phpunit.xml.dist
+    ├── pluginfile.php
+    ├── purge_cache.bat
+    ├── run_seed.bat
+    ├── run_verify.bat
+    ├── security.txt
+    ├── seed_data.php
+    ├── test_api.html
+    ├── tokenpluginfile.php
+    ├── verify_data.php
+    └── version.php
 ```
 
 > Bạn nên cập nhật lại phần này theo đúng cây thư mục thực tế trong repo.
@@ -170,14 +278,3 @@ Mọi đóng góp đều được chào đón:
   👉 [Issues](https://github.com/Nhathuy2232/tn-da22ttb-110122223-nguyendinhnhathuy-chatbot/issues)
 
 ---
-
-## 📄 License
-
-Hiện tại chưa khai báo rõ license.  
-Khuyến nghị thêm file `LICENSE` (MIT/Apache-2.0/ GPL...) để chuẩn hóa dự án.
-
----
-
-## 📬 Liên hệ
-
-Bạn có thể bổ sung email hoặc thông tin liên hệ chính thức của nhóm tại đây.
