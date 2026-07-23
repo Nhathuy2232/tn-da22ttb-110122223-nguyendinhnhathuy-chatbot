@@ -17,7 +17,7 @@
 
 - **Repository:** [Nhathuy2232/tn-da22ttb-110122223-nguyendinhnhathuy-chatbot](https://github.com/Nhathuy2232/tn-da22ttb-110122223-nguyendinhnhathuy-chatbot)  
 - **Repo ID:** `1265369999`  
-- **Sinh viên thực hiện:** Nguyễn Đình Nhật Huy *(cập nhật lại nếu cần)*  
+- **Sinh viên thực hiện:** Nguyễn Đình Nhật Huy 
 - **MSSV:** `110122223`  
 - **Loại dự án:** Ứng dụng chatbot trên nền tảng web  
 
